@@ -35,15 +35,14 @@ function random(a, b) {
 
 const factory = new Function(
   prelude + code +
-  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA};',
+  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TAIL_N};',
 );
 
-const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA} = factory();
+const {particles, advect, sources, CHARGES, PLATES, W, H, TAIL_N} = factory();
 
 const NC = Math.max(1, sources.length);
 const SCALE = W / GW;
 const planes = Array.from({length: NC}, () => new Float32Array(GW * GH));
-const decay = 1 - TRAIL_ALPHA / 255;
 
 function stamp(ch, x, y, w) {
   const gx = (x + W / 2) / SCALE;
@@ -62,22 +61,28 @@ function hexToRgb(h) {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+// 渲染模型：每帧清屏，按每颗粒子的轨迹历史画折线。
+// 所以跑到稳态后，把最后一帧的折线光栅化即可。
 for (let f = 0; f < FRAMES; f++) {
-  for (let k = 0; k < NC; k++) {
-    const pl = planes[k];
-    for (let i = 0; i < pl.length; i++) pl[i] *= decay;
-  }
+  const last = f === FRAMES - 1;
 
   for (let i = 0; i < particles.length; i++) {
-    const s = advect(particles[i]);
-    if (s.skip) continue;
+    const p = particles[i];
+    advect(p);
+    if (!last) continue;
 
-    const ch = Math.min(s.ch | 0, NC - 1);
-    const w = (s.a / 255) * 0.06;
-    const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
-    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / (SCALE * 0.5)));
-    for (let t = 0; t <= steps; t++) {
-      stamp(ch, s.x0 + dx * (t / steps), s.y0 + dy * (t / steps), w / (steps + 1));
+    const h = p.hist;
+    if (h.length < 4) continue;
+
+    const ch = Math.min(p.ch | 0, NC - 1);
+    const wPer = (p.alpha / 255) / (h.length / 2);
+
+    for (let k = 2; k < h.length; k += 2) {
+      const x0 = h[k - 2], y0 = h[k - 1], x1 = h[k], y1 = h[k + 1];
+      const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (SCALE * 0.5)));
+      for (let t = 0; t <= steps; t++) {
+        stamp(ch, x0 + (x1 - x0) * (t / steps), y0 + (y1 - y0) * (t / steps), wPer);
+      }
     }
     segs++;
   }
