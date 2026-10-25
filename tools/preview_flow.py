@@ -89,25 +89,33 @@ def fmt_q(q):
     return ("+" if q > 0 else "\u2212") + f"{abs(q):.2f}q"
 
 
-# 平板
-pl = scene["plate"]
-px, py, plen, prgb = pl["x"], pl["y"], pl["len"], tuple(pl["rgb"])
-for i in range(6, 0, -1):
-    d.rounded_rectangle(
-        [X(px - plen / 2 - i * 3), Y(py - 9 - i * 2),
-         X(px + plen / 2 + i * 3), Y(py + 9 + i * 2)],
-        radius=8, fill=prgb + (9,),
-    )
-d.rounded_rectangle(
-    [X(px - plen / 2), Y(py - 9), X(px + plen / 2), Y(py + 9)],
-    radius=7, fill=(12, 12, 14, 255), outline=prgb + (190,), width=2,
-)
-
+# 平板（可以有多块）
 f_plus = load_font(FONT_BOLD, 13)
-n_plus = max(3, round(plen / 70))
-for i in range(n_plus):
-    d.text((X(px - plen / 2 + (i + 0.5) * (plen / n_plus)), Y(py)), "+",
-           font=f_plus, fill=(196, 182, 172, 200), anchor="mm")
+f_plab = load_font(FONT_REG, 16)
+for pl in scene.get("plates", []):
+    px, py, plen = pl["x"], pl["y"], pl["len"]
+    prgb = tuple(pl["rgb"])
+
+    for i in range(6, 0, -1):
+        d.rounded_rectangle(
+            [X(px - plen / 2 - i * 3), Y(py - 9 - i * 2),
+             X(px + plen / 2 + i * 3), Y(py + 9 + i * 2)],
+            radius=8, fill=prgb + (9,),
+        )
+    d.rounded_rectangle(
+        [X(px - plen / 2), Y(py - 9), X(px + plen / 2), Y(py + 9)],
+        radius=7, fill=(12, 12, 14, 255), outline=prgb + (185,), width=2,
+    )
+
+    n_plus = max(3, round(plen / 70))
+    sign = "+" if pl["lambda"] >= 0 else "\u2212"
+    for i in range(n_plus):
+        d.text((X(px - plen / 2 + (i + 0.5) * (plen / n_plus)), Y(py)), sign,
+               font=f_plus, fill=prgb + (210,), anchor="mm")
+
+    d.text((X(px + plen / 2 + 20), Y(py)),
+           f"\u5e73\u677f \u03bb={pl['lambda']:.2f}",
+           font=f_plab, fill=(130, 124, 118), anchor="lm")
 
 # 电荷
 f_lab = load_font(FONT_REG, 20)
@@ -127,10 +135,6 @@ for c in scene["charges"]:
 
     d.text((X(cx + r + 14), Y(cy - r - 10)), fmt_q(q), font=f_lab,
            fill=(168, 162, 155), anchor="lm")
-
-# 平板标签
-d.text((X(px + plen / 2 + 22), Y(py)), "\u6709\u9650\u957f\u5e26\u7535\u5e73\u677f",
-       font=load_font(FONT_REG, 18), fill=(130, 124, 118), anchor="lm")
 
 # 说明
 fa = load_font(FONT_REG, 17)

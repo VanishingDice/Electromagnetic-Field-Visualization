@@ -35,10 +35,10 @@ function random(a, b) {
 
 const factory = new Function(
   prelude + code +
-  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATE, W, H, TRAIL_ALPHA};',
+  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA};',
 );
 
-const {particles, advect, sources, CHARGES, PLATE, W, H, TRAIL_ALPHA} = factory();
+const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA} = factory();
 
 const NC = Math.max(1, sources.length);
 const SCALE = W / GW;
@@ -94,7 +94,7 @@ const scene = {
   gh: GH,
   colors: sources.map(s => s.rgb),
   charges: CHARGES.map(c => ({x: c.x, y: c.y, q: c.q, rgb: hexToRgb(c.color)})),
-  plate: {x: PLATE.x, y: PLATE.y, len: PLATE.len, rgb: hexToRgb(PLATE.color)},
+  plates: PLATES.map(p => ({x: p.x, y: p.y, len: p.len, lambda: p.lambda, rgb: hexToRgb(p.color)})),
 };
 
 fs.writeFileSync(path.join(HERE, 'scene.json'), JSON.stringify(scene, null, 2));
