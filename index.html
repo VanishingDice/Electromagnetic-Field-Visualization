@@ -1,0 +1,357 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>电场分布 · 流动场线</title>
+<script src="https://cdn.jsdelivr.net/npm/p5@2.3.4/lib/p5.min.js"></script>
+<style>
+  html, body {
+    margin: 0; height: 100%;
+    background: #04070c;
+    display: grid; place-items: center;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  canvas { border-radius: 12px; box-shadow: 0 30px 90px rgba(0,0,0,.7); }
+  .hint { position: fixed; left: 18px; bottom: 12px; color: #334155; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="hint">拖动电荷 · R 重置</div>
+
+<script>
+/* =====================================================================
+   电场分布 · 流动场线
+   1400 个粒子沿 E 方向运动，在独立的拖尾层上留下短线段，
+   拖尾层每帧按 alpha 衰减 —— 于是整个画面就是"无数条流动的场线"。
+
+   物理
+     点电荷:      E = k q (r−r0) / |r−r0|³
+     有限长线电荷: Ex = kλ (1/ra − 1/rb)
+                  Ey = kλ (b/rb − a/ra) / y
+   ===================================================================== */
+
+const W = 1600, H = 900, R0 = 100;
+
+const CHARGES = [
+  {x: -470, y: -180, q:  1.0},
+  {x:  170, y: -260, q: -1.3},
+  {x:  600, y:  120, q:  0.7},
+];
+
+// 记下初始位置，按 R 可以还原
+const HOME = CHARGES.map(c => ({x: c.x, y: c.y}));
+
+const PLATE = {x: 0, y: 210, len: 620, lambda: 0.55};
+
+const COL_A = [251, 113, 133];   // 来自 +1.0q
+const COL_C = [167, 139, 250];   // 来自 +0.7q
+const COL_P = [ 34, 211, 238];   // 来自平板
+const COL_B = [ 96, 165, 250];   // 负电荷本体
+
+const N_PARTICLES  = 1400;
+const SPEED        = 3.4;
+const TRAIL_ALPHA  = 8;      // 越小拖尾越长
+const BG           = [4, 7, 12];
+
+let particles = [];
+let trail;
+let cnv;
+
+// —— 拖拽状态 ——
+let dragging = -1;      // 正在拖的电荷索引，-1 = 没在拖
+let hoverIdx = -1;      // 鼠标悬停的电荷索引
+const HIT_R  = 38;      // 抓取半径（像素）
+const MARGIN = 60;      // 拖动范围距画布边缘的留白
+
+/* ---------------- 场 ---------------- */
+function fieldAt(px, py) {
+  const x = px / R0, y = py / R0;
+  let ex = 0, ey = 0;
+
+  for (let i = 0; i < CHARGES.length; i++) {
+    const c = CHARGES[i];
+    const dx = x - c.x / R0;
+    const dy = y - c.y / R0;
+    const r2 = dx * dx + dy * dy;
+    if (r2 < 0.0016) continue;
+    const inv = c.q / (r2 * Math.sqrt(r2));
+    ex += inv * dx;
+    ey += inv * dy;
+  }
+
+  const L = PLATE.len / R0 / 2;
+  const a = x - PLATE.x / R0 - L;
+  const b = x - PLATE.x / R0 + L;
+  const yy = y - PLATE.y / R0;
+  const ra = Math.sqrt(a * a + yy * yy);
+  const rb = Math.sqrt(b * b + yy * yy);
+  const ys = Math.abs(yy) < 0.02 ? (yy >= 0 ? 0.02 : -0.02) : yy;
+
+  ex += PLATE.lambda * (1 / ra - 1 / rb);
+  ey += PLATE.lambda * (b / rb - a / ra) / ys;
+
+  return [ex, ey];
+}
+
+/* ---------------- 粒子 ---------------- */
+function spawnParticle(p) {
+  const r = random();
+
+  if (r < 0.34) {                       // 从 +1.0q 出发
+    const a = random(TAU);
+    p.x = CHARGES[0].x + Math.cos(a) * 24;
+    p.y = CHARGES[0].y + Math.sin(a) * 24;
+    p.col = COL_A;
+  } else if (r < 0.58) {                // 从 +0.7q 出发
+    const a = random(TAU);
+    p.x = CHARGES[2].x + Math.cos(a) * 24;
+    p.y = CHARGES[2].y + Math.sin(a) * 24;
+    p.col = COL_C;
+  } else {                              // 从平板两侧出发
+    p.x = PLATE.x + random(-PLATE.len / 2, PLATE.len / 2);
+    p.y = PLATE.y + (random() < 0.5 ? -1 : 1) * 14;
+    p.col = COL_P;
+  }
+
+  p.spd     = SPEED * random(0.85, 1.15);
+  p.jit     = random(-0.03, 0.03);      // 固定的微小偏角，柔化"分界线"，也更像真实流场
+  p.life    = 0;
+  p.maxLife = random(160, 460);
+  p.alpha   = random(90, 170);
+  p.skip    = true;                     // 重生后第一段不画，避免横穿屏幕
+}
+
+function initParticles() {
+  particles = [];
+  for (let i = 0; i < N_PARTICLES; i++) {
+    const p = {x: 0, y: 0, col: COL_P, spd: SPEED, life: 0, maxLife: 300, alpha: 120, skip: true};
+    spawnParticle(p);
+    particles.push(p);
+  }
+}
+
+/* 推进一步，返回这一小段（绘制和预览共用同一份逻辑） */
+function advect(p) {
+  const f = fieldAt(p.x, p.y);
+
+  // 按粒子的固定偏角旋转一下方向
+  const ca = Math.cos(p.jit), sa = Math.sin(p.jit);
+  const rx = f[0] * ca - f[1] * sa;
+  const ry = f[0] * sa + f[1] * ca;
+
+  const m = Math.hypot(rx, ry) || 1;
+  const nx = p.x + (rx / m) * p.spd;
+  const ny = p.y + (ry / m) * p.spd;
+
+  const seg = {x0: p.x, y0: p.y, x1: nx, y1: ny, col: p.col, a: p.alpha, skip: p.skip};
+
+  p.skip = false;
+  p.x = nx;
+  p.y = ny;
+  p.life++;
+
+  let dead = p.life > p.maxLife;
+  if (Math.abs(p.x) > W / 2 + 40 || Math.abs(p.y) > H / 2 + 40) dead = true;
+  for (let k = 0; k < CHARGES.length; k++) {
+    if (Math.hypot(p.x - CHARGES[k].x, p.y - CHARGES[k].y) < 24) dead = true;
+  }
+  if (dead) spawnParticle(p);
+
+  return seg;
+}
+
+/* ===================== p5 ===================== */
+function setup() {
+  cnv = createCanvas(W, H);
+  pixelDensity(1);
+  randomSeed(7);
+
+  trail = createGraphics(W, H);
+  trail.pixelDensity(1);
+  trail.background(BG[0], BG[1], BG[2]);
+
+  initParticles();
+}
+
+function draw() {
+  // ① 拖尾层：不清空，只按 alpha 衰减 —— 这就是"线"的来源
+  trail.background(BG[0], BG[1], BG[2], TRAIL_ALPHA);
+
+  // ⚠️ 粒子坐标是以画布中心为原点的世界坐标（-W/2 ~ W/2），
+  //    trail 却是原点在左上角的独立画布，这里必须做同样的平移。
+  //    漏掉这一句，流场就会整体偏到左上角 (−W/2, −H/2)。
+  trail.push();
+  trail.translate(W / 2, H / 2);
+  trail.strokeCap(ROUND);
+  trail.strokeWeight(1.25);
+
+  for (let i = 0; i < particles.length; i++) {
+    const s = advect(particles[i]);
+    if (s.skip) continue;
+    trail.stroke(s.col[0], s.col[1], s.col[2], s.a);
+    trail.line(s.x0, s.y0, s.x1, s.y1);
+  }
+  trail.pop();
+
+  // ② 主画布：每帧重画，静态元素不会有累积问题
+  background(BG[0], BG[1], BG[2]);
+  image(trail, 0, 0);
+
+  hoverIdx = dragging >= 0 ? dragging : chargeAt(mouseX, mouseY);
+
+  push();
+  translate(W / 2, H / 2);
+  drawPlate();
+  drawCharges();
+  drawLabels();
+  pop();
+
+  drawCaption();
+  cnv.style('cursor', dragging >= 0 ? 'grabbing' : (hoverIdx >= 0 ? 'grab' : 'default'));
+}
+
+function drawPlate() {
+  const {x, y, len} = PLATE;
+
+  noStroke();
+  for (let i = 6; i > 0; i--) {
+    fill(34, 211, 238, 9);
+    rect(x - len / 2 - i * 3, y - 9 - i * 2, len + i * 6, 18 + i * 4, 8);
+  }
+
+  fill(10, 20, 34);
+  stroke(34, 211, 238, 200);
+  strokeWeight(2);
+  rect(x - len / 2, y - 9, len, 18, 7);
+
+  noStroke();
+  fill(248, 113, 113);
+  textAlign(CENTER, CENTER);
+  textSize(13);
+  for (let i = 0; i < 9; i++) {
+    text('+', x - len / 2 + (i + 0.5) * (len / 9), y);
+  }
+}
+
+function drawCharges() {
+  const cols = [COL_A, COL_B, COL_C];
+
+  for (let i = 0; i < CHARGES.length; i++) {
+    const c = CHARGES[i];
+    const col = cols[i];
+    const r = 11 + Math.abs(c.q) * 6;
+
+    noStroke();
+    for (let k = 7; k > 0; k--) {
+      fill(col[0], col[1], col[2], 10);
+      circle(c.x, c.y, r * 2 + k * 13);
+    }
+
+    fill(col[0], col[1], col[2]);
+    circle(c.x, c.y, r * 2);
+
+    // 悬停 / 拖拽时的抓取环
+    if (i === hoverIdx) {
+      noFill();
+      stroke(col[0], col[1], col[2], i === dragging ? 235 : 125);
+      strokeWeight(i === dragging ? 2.5 : 1.5);
+      circle(c.x, c.y, r * 2 + 14 + (i === dragging ? 6 : 0));
+      noStroke();
+    }
+
+    fill(4, 7, 12);
+    textAlign(CENTER, CENTER);
+    textSize(r * 1.25);
+    textStyle(BOLD);
+    text(c.q > 0 ? '+' : '−', c.x, c.y + 1);
+    textStyle(NORMAL);
+  }
+}
+
+function drawLabels() {
+  noStroke();
+  fill(203, 213, 225);
+  textAlign(LEFT, CENTER);
+  textSize(21);
+
+  const names = ['+1.0q', '−1.3q', '+0.7q'];
+  const off = [[34, -36], [36, -8], [34, -32]];
+  for (let i = 0; i < CHARGES.length; i++) {
+    const c = CHARGES[i];
+    text(names[i], c.x + off[i][0], c.y + off[i][1]);
+  }
+
+  fill(148, 163, 184);
+  textSize(19);
+  text('有限长带电平板   +λ', PLATE.x + PLATE.len / 2 + 22, PLATE.y);
+}
+
+function drawCaption() {
+  noStroke();
+
+  const a = '电场线从正电荷与平板表面流出，终止于负电荷或延伸至无穷远';
+  textSize(17);
+  textAlign(LEFT, TOP);
+  const wa = textWidth(a);
+  fill(4, 7, 12, 190);
+  rect(24, 20, wa + 28, 36, 9);
+  fill(100, 116, 139);
+  text(a, 38, 30);
+
+  const b = '线的疏密对应场强 · 颜色对应源头';
+  textSize(15);
+  textAlign(RIGHT, BOTTOM);
+  const wb = textWidth(b);
+  fill(4, 7, 12, 190);
+  rect(W - 37 - wb - 26, H - 56, wb + 26, 32, 9);
+  fill(100, 116, 139);
+  text(b, W - 37, H - 32);
+}
+
+/* ---------------- 拖拽 ---------------- */
+function chargeAt(mx, my) {
+  const wx = mx - W / 2;
+  const wy = my - H / 2;
+  let best = -1;
+  let bestD = HIT_R;
+  for (let i = 0; i < CHARGES.length; i++) {
+    const d = Math.hypot(wx - CHARGES[i].x, wy - CHARGES[i].y);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+function mousePressed() {
+  dragging = chargeAt(mouseX, mouseY);
+  return false;
+}
+
+function mouseDragged() {
+  if (dragging < 0) return false;
+  const c = CHARGES[dragging];
+  c.x = constrain(mouseX - W / 2, -W / 2 + MARGIN, W / 2 - MARGIN);
+  c.y = constrain(mouseY - H / 2, -H / 2 + MARGIN, H / 2 - MARGIN);
+  return false;
+}
+
+function mouseReleased() {
+  dragging = -1;
+  return false;
+}
+
+function keyPressed() {
+  if (key === 'r' || key === 'R') {
+    for (let i = 0; i < CHARGES.length; i++) {
+      CHARGES[i].x = HOME[i].x;
+      CHARGES[i].y = HOME[i].y;
+    }
+    trail.background(BG[0], BG[1], BG[2]);
+    initParticles();
+  }
+}
+</script>
+</body>
+</html>
