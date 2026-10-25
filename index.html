@@ -67,14 +67,22 @@
   #panel h2:first-of-type { margin-top: 14px; }
 
   .ctl {
-    display: grid; grid-template-columns: 62px 1fr 46px;
+    display: grid; grid-template-columns: 62px 1fr 58px;
     align-items: center; gap: 9px; margin: 0 0 9px;
   }
   .ctl > span { font-size: 11.5px; color: #8b837b; white-space: nowrap; }
-  .ctl > output {
-    font-size: 10.5px; color: #a9a29a; text-align: right;
+
+  input[type=number] {
+    width: 100%; padding: 3px 4px; text-align: right;
+    background: #141416; color: #b9b3ac;
+    border: 1px solid #26262a; border-radius: 4px;
+    font: inherit; font-size: 10.5px;
     font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
   }
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+  input[type=number]:focus { outline: none; border-color: #3f4148; color: #ded8d0; }
 
   input[type=range] {
     -webkit-appearance: none; appearance: none;
@@ -143,15 +151,15 @@
   <h2>流场</h2>
   <label class="ctl"><span>粒子数</span>
     <input id="np" type="range" min="200" max="2600" step="100" value="1400">
-    <output id="npv">1400</output>
+    <input id="npn" type="number" min="200" max="2600" step="100" value="1400">
   </label>
   <label class="ctl"><span>拖尾长度</span>
     <input id="trl" type="range" min="0" max="100" step="1" value="70">
-    <output id="trlv">70</output>
+    <input id="trln" type="number" min="0" max="100" step="1" value="70">
   </label>
   <label class="ctl"><span>流速</span>
     <input id="spd" type="range" min="0.8" max="7" step="0.1" value="3.4">
-    <output id="spdv">3.4</output>
+    <input id="spdn" type="number" min="0.8" max="7" step="0.1" value="3.4">
   </label>
 
   <h2>电荷</h2>
@@ -213,9 +221,12 @@ let TRAIL_ALPHA = 8.1;
 const MAX_CHARGES = 8;
 const MAX_PLATES  = 6;
 
-/* 拖拽 / 悬停：{kind: 'charge'|'plate'|null, idx} */
-let drag  = {kind: null, idx: -1};
-let hover = {kind: null, idx: -1};
+/* 拖拽 / 悬停：{kind: 'charge'|'plate'|null, idx, dx, dy}
+   dx/dy 是按下时「鼠标位置」到「物体中心」的偏移，保证抓住哪里就从哪里拖，
+   不会先跳到几何中心。 */
+const NO_DRAG = () => ({kind: null, idx: -1, dx: 0, dy: 0});
+let drag  = NO_DRAG();
+let hover = NO_DRAG();
 
 const HIT_R     = 38;    // 电荷抓取半径
 const PLATE_HIT = 22;    // 平板抓取距离
@@ -454,8 +465,8 @@ function draw() {
   background(BG[0], BG[1], BG[2]);
   image(trail, 0, 0);
 
-  if (drag.kind === 'charge' && drag.idx >= CHARGES.length) drag = {kind: null, idx: -1};
-  if (drag.kind === 'plate' && drag.idx >= PLATES.length) drag = {kind: null, idx: -1};
+  if (drag.kind === 'charge' && drag.idx >= CHARGES.length) drag = NO_DRAG();
+  if (drag.kind === 'plate' && drag.idx >= PLATES.length) drag = NO_DRAG();
 
   push();
   translate(W / 2, H / 2);
@@ -605,12 +616,12 @@ function pickAt(wx, wy) {
       best = i;
     }
   }
-  if (best >= 0) return {kind: 'charge', idx: best};
+  if (best >= 0) return {kind: 'charge', idx: best, dx: 0, dy: 0};
 
   for (let i = 0; i < PLATES.length; i++) {
-    if (distToPlate(wx, wy, PLATES[i]) < PLATE_HIT) return {kind: 'plate', idx: i};
+    if (distToPlate(wx, wy, PLATES[i]) < PLATE_HIT) return {kind: 'plate', idx: i, dx: 0, dy: 0};
   }
-  return {kind: null, idx: -1};
+  return NO_DRAG();
 }
 
 function attachPointer() {
@@ -623,6 +634,12 @@ function attachPointer() {
     pointer.y = p.y;
     drag = pickAt(p.x, p.y);
     if (drag.kind) {
+      const item = drag.kind === 'charge' ? CHARGES[drag.idx] : PLATES[drag.idx];
+      if (item) {
+        // 记住抓取点相对中心的偏移，之后拖动保持这个偏移
+        drag.dx = item.x - p.x;
+        drag.dy = item.y - p.y;
+      }
       try { e.setPointerCapture(ev.pointerId); } catch (_) {}
       ev.preventDefault();
     }
@@ -636,19 +653,19 @@ function attachPointer() {
     if (drag.kind) {
       const item = drag.kind === 'charge' ? CHARGES[drag.idx] : PLATES[drag.idx];
       if (item) {
-        item.x = clamp(p.x, -W / 2 + MARGIN, W / 2 - MARGIN);
-        item.y = clamp(p.y, -H / 2 + MARGIN, H / 2 - MARGIN);
+        item.x = clamp(p.x + drag.dx, -W / 2 + MARGIN, W / 2 - MARGIN);
+        item.y = clamp(p.y + drag.dy, -H / 2 + MARGIN, H / 2 - MARGIN);
         ev.preventDefault();
       }
     }
   });
 
   const up = ev => {
-    drag = {kind: null, idx: -1};
+    drag = NO_DRAG();
     try { e.releasePointerCapture(ev.pointerId); } catch (_) {}
   };
   e.addEventListener('pointerup', up);
-  e.addEventListener('pointercancel', () => { drag = {kind: null, idx: -1}; });
+  e.addEventListener('pointercancel', () => { drag = NO_DRAG(); });
 }
 
 function updateCursor() {
@@ -659,37 +676,38 @@ function updateCursor() {
 /* ===================== 面板 ===================== */
 const $ = id => document.getElementById(id);
 
+/* 滑杆 + 数字框双向同步：拖也能量，直接键入也能量 */
+function bindPair(rangeEl, numEl, apply) {
+  const sync = src => {
+    const v = parseFloat(src === 'range' ? rangeEl.value : numEl.value);
+    if (!Number.isFinite(v)) return;              // 输入框里是 ""、"-" 这类中间态
+    const cv = clamp(v, +rangeEl.min, +rangeEl.max);
+    if (src === 'range') numEl.value = cv;
+    else rangeEl.value = cv;
+    apply(cv);
+  };
+  rangeEl.addEventListener('input', () => sync('range'));
+  numEl.addEventListener('input', () => sync('number'));
+  // 失焦时规整数字框（处理越界和中间态）
+  numEl.addEventListener('change', () => { numEl.value = rangeEl.value; });
+}
+
+function setPair(rangeId, numId, v) {
+  const r = $(rangeId), n = $(numId);
+  if (r) r.value = v;
+  if (n) n.value = v;
+}
+
 function buildPanel() {
-  const np = $('np'), npv = $('npv');
-  np.value = N_PARTICLES;
-  npv.textContent = N_PARTICLES;
-  np.addEventListener('input', () => {
-    setParticleCount(+np.value);
-    npv.textContent = np.value;
-  });
-
-  const tr = $('trl'), trv = $('trlv');
-  tr.value = 70;
-  trv.textContent = 70;
-  TRAIL_ALPHA = 20 - 70 * 0.17;
-  tr.addEventListener('input', () => {
-    TRAIL_ALPHA = 20 - (+tr.value) * 0.17;
-    trv.textContent = tr.value;
-  });
-
-  const sp = $('spd'), spv = $('spdv');
-  sp.value = SPEED;
-  spv.textContent = SPEED.toFixed(1);
-  sp.addEventListener('input', () => {
-    SPEED = +sp.value;
-    spv.textContent = SPEED.toFixed(1);
-  });
+  bindPair($('np'), $('npn'), v => setParticleCount(Math.round(v)));
+  bindPair($('trl'), $('trln'), v => { TRAIL_ALPHA = 20 - v * 0.17; });
+  bindPair($('spd'), $('spdn'), v => { SPEED = v; });
 
   $('add').addEventListener('click', addCharge);
   $('addPlate').addEventListener('click', addPlate);
   $('reset').addEventListener('click', resetAll);
 
-  // 电荷和平板共用一个委托处理器：靠 data-list 区分
+  // 电荷和平板共用一套委托处理器：靠 data-list 区分
   $('panel').addEventListener('input', ev => {
     const t = ev.target;
     if (!t.dataset || t.dataset.i === undefined || !t.dataset.list) return;
@@ -699,23 +717,42 @@ function buildPanel() {
     if (!item) return;
 
     const k = t.dataset.k;
-    if (k === 'q') item.q = +t.value;
-    else if (k === 'len') item.len = +t.value;
-    else if (k === 'lambda') item.lambda = +t.value;
-    else if (k === 'color') {
+
+    if (k === 'color') {
       item.color = t.value;
       const dot = t.parentElement.querySelector('.dot');
       if (dot) dot.style.background = t.value;
-    } else return;
-
-    const out = t.parentElement.querySelector('output');
-    if (out) {
-      out.textContent = k === 'q' ? formatQ(item.q)
-        : k === 'lambda' ? item.lambda.toFixed(2)
-        : item.len;
+      rebuildSources();
+      return;
     }
 
+    if (k !== 'q' && k !== 'len' && k !== 'lambda') return;
+
+    // 同一行里滑杆和数字框互为镜像
+    const range = t.parentElement.querySelector('input[type=range]');
+    const num = t.parentElement.querySelector('input[type=number]');
+    if (!range || !num) return;
+
+    const v = parseFloat(t.value);
+    if (!Number.isFinite(v)) return;
+
+    const cv = clamp(v, +range.min, +range.max);
+    if (t.type === 'range') num.value = cv;
+    else range.value = cv;
+
+    if (k === 'q') item.q = cv;
+    else if (k === 'len') item.len = cv;
+    else item.lambda = cv;
+
     rebuildSources();
+  });
+
+  // 数字框失焦时规整
+  $('panel').addEventListener('change', ev => {
+    const t = ev.target;
+    if (t.type !== 'number' || !t.dataset || t.dataset.i === undefined) return;
+    const range = t.parentElement.querySelector('input[type=range]');
+    if (range) t.value = range.value;
   });
 
   $('panel').addEventListener('click', ev => {
@@ -724,8 +761,8 @@ function buildPanel() {
 
     const arr = t.dataset.list === 'plate' ? PLATES : CHARGES;
     arr.splice(+t.dataset.i, 1);
-    drag = {kind: null, idx: -1};
-    hover = {kind: null, idx: -1};
+    drag = NO_DRAG();
+    hover = NO_DRAG();
     rebuildSources();
     renderAll();
   });
@@ -746,7 +783,8 @@ function chargeCard(c, i) {
       <span>q</span>
       <input type="range" data-list="charge" data-k="q" data-i="${i}"
              min="-3" max="3" step="0.05" value="${c.q}">
-      <output>${formatQ(c.q)}</output>
+      <input type="number" data-list="charge" data-k="q" data-i="${i}"
+             min="-3" max="3" step="0.05" value="${(+c.q).toFixed(2)}">
     </label>
   </div>`;
 }
@@ -764,13 +802,15 @@ function plateCard(p, i) {
       <span>长度</span>
       <input type="range" data-list="plate" data-k="len" data-i="${i}"
              min="160" max="1100" step="10" value="${p.len}">
-      <output>${p.len}</output>
+      <input type="number" data-list="plate" data-k="len" data-i="${i}"
+             min="160" max="1100" step="10" value="${Math.round(p.len)}">
     </label>
     <label class="ctl">
       <span>λ</span>
       <input type="range" data-list="plate" data-k="lambda" data-i="${i}"
              min="-1.4" max="1.4" step="0.05" value="${p.lambda}">
-      <output>${p.lambda.toFixed(2)}</output>
+      <input type="number" data-list="plate" data-k="lambda" data-i="${i}"
+             min="-1.4" max="1.4" step="0.05" value="${(+p.lambda).toFixed(2)}">
     </label>
   </div>`;
 }
@@ -812,15 +852,12 @@ function resetAll() {
   CHARGES = DEFAULT_CHARGES.map(c => ({...c}));
   PLATES  = DEFAULT_PLATES.map(p => ({...p}));
   SPEED = 3.4;
-  drag = {kind: null, idx: -1};
-  hover = {kind: null, idx: -1};
+  drag = NO_DRAG();
+  hover = NO_DRAG();
 
-  $('np').value = 1400;
-  $('npv').textContent = 1400;
-  $('spd').value = 3.4;
-  $('spdv').textContent = '3.4';
-  $('trl').value = 70;
-  $('trlv').textContent = '70';
+  setPair('np', 'npn', 1400);
+  setPair('spd', 'spdn', 3.4);
+  setPair('trl', 'trln', 70);
   TRAIL_ALPHA = 20 - 70 * 0.17;
 
   rebuildSources();
