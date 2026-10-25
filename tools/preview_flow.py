@@ -136,14 +136,6 @@ for c in scene["charges"]:
     d.text((X(cx + r + 14), Y(cy - r - 10)), fmt_q(q), font=f_lab,
            fill=(168, 162, 155), anchor="lm")
 
-# 说明
-fa = load_font(FONT_REG, 17)
-cap_a = ("\u7535\u573a\u7ebf\u4ece\u6b63\u7535\u8377\u4e0e\u5e73\u677f\u8868\u9762\u6d41\u51fa\uff0c"
-         "\u7ec8\u6b62\u4e8e\u8d1f\u7535\u8377\u6216\u5ef6\u4f38\u81f3\u65e0\u7a77\u8fdc")
-wa = d.textlength(cap_a, font=fa)
-d.rounded_rectangle([24, 20, 24 + wa + 28, 56], radius=9, fill=(0, 0, 0, 190))
-d.text((38, 30), cap_a, font=fa, fill=(110, 104, 98), anchor="la")
-
 os.makedirs(DOCS, exist_ok=True)
 out = os.path.join(DOCS, "preview.png")
 img.save(out, optimize=True)

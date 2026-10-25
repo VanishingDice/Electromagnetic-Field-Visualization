@@ -35,15 +35,16 @@ function random(a, b) {
 
 const factory = new Function(
   prelude + code +
-  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, DESIGN_W, DESIGN_H, TRAIL_ALPHA};',
+  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA};',
 );
 
-const {particles, advect, sources, CHARGES, PLATES, DESIGN_W: W, DESIGN_H: H, TRAIL_ALPHA} = factory();
+const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA} = factory();
+
+const decay = 1 - TRAIL_ALPHA / 255;
 
 const NC = Math.max(1, sources.length);
 const SCALE = W / GW;
 const planes = Array.from({length: NC}, () => new Float32Array(GW * GH));
-const decay = 1 - TRAIL_ALPHA / 255;
 
 function stamp(ch, x, y, w) {
   const gx = (x + W / 2) / SCALE;
@@ -62,6 +63,8 @@ function hexToRgb(h) {
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
 
+// 渲染模型：累积层每帧乘一个衰减系数，再把这一帧的线段叠上去。
+// 这里用浮点模拟（页面里是 8 位向下取整），稳态的空间分布是一致的。
 for (let f = 0; f < FRAMES; f++) {
   for (let k = 0; k < NC; k++) {
     const pl = planes[k];
