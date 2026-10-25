@@ -189,8 +189,8 @@
     <input id="npn" type="number" min="200" max="2600" step="100" value="1400">
   </label>
   <label class="ctl"><span>拖尾长度</span>
-    <input id="trl" type="range" min="0" max="100" step="1" value="34">
-    <input id="trln" type="number" min="0" max="100" step="1" value="34">
+    <input id="trl" type="range" min="0" max="100" step="1" value="70">
+    <input id="trln" type="number" min="0" max="100" step="1" value="70">
   </label>
   <label class="ctl"><span>流速</span>
     <input id="spd" type="range" min="0.8" max="7" step="0.1" value="3.4">
@@ -211,7 +211,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.5</div>
+<div id="ver">v0.0.6</div>
 
 <script>
 /* =====================================================================
@@ -314,15 +314,10 @@ function captureLayout() {
 
 let N_PARTICLES = 1400;
 let SPEED = 3.4;
-let TAIL_N = 30;                // 每颗粒子保留多少帧轨迹
-const TAIL_MIN = 4, TAIL_MAX = 80;
+let TRAIL_ALPHA = 8.1;          // 每帧从累积层里衰减掉多少（0~255）
+const TRAIL_SCALE = 0.5;        // 累积层按半分辨率渲染，再放大回画布
 const MAX_CHARGES = 8;
 const MAX_PLATES  = 6;
-
-/* 滑杆 0~100 → 保留帧数 */
-function setTail(v) {
-  TAIL_N = Math.round(TAIL_MIN + (v / 100) * (TAIL_MAX - TAIL_MIN));
-}
 
 /* 拖拽 / 悬停：{kind: 'charge'|'plate'|null, idx, dx, dy}
    dx/dy 是按下时「鼠标位置」到「物体中心」的偏移，保证抓住哪里就从哪里拖，
@@ -339,6 +334,7 @@ const pointer   = {x: 0, y: 0};
 let particles = [];
 let sources   = [];
 let cnv;
+let trail;      // 半分辨率累积层
 
 /* ---------------- 小工具 ---------------- */
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -465,13 +461,12 @@ function spawnParticle(p) {
   p.life    = 0;
   p.maxLife = random(160, 460);
   p.alpha   = random(120, 210);
-  p.hist    = [];
   p.skip    = true;
 }
 
 function blankParticle() {
   return {x: 0, y: 0, rgb: [160, 160, 160], ch: 0, mul: 1, jit: 0,
-          life: 0, maxLife: 300, alpha: 150, hist: [], skip: true};
+          life: 0, maxLife: 300, alpha: 150, skip: true};
 }
 
 function setParticleCount(n) {
@@ -505,19 +500,16 @@ function advect(p) {
   }
 
   const step = SPEED * UNIT * p.mul;   // UNIT 让竖屏下的相对速度与宽屏一致
+  const x0 = p.x, y0 = p.y;
   const nx = p.x + (rx / m) * step;
   const ny = p.y + (ry / m) * step;
+
+  const seg = {x0, y0, x1: nx, y1: ny, rgb: p.rgb, a: p.alpha, ch: p.ch, skip: p.skip};
 
   p.skip = false;
   p.x = nx;
   p.y = ny;
   p.life++;
-
-  // 记录轨迹点：拖尾靠这份历史画出来，不靠像素累积
-  p.hist.push(nx, ny);
-  if (p.hist.length > TAIL_N * 2) {
-    p.hist.splice(0, 2);
-  }
 
   let dead = p.life > p.maxLife;
   if (Math.abs(p.x) > W / 2 + 40 || Math.abs(p.y) > H / 2 + 40) dead = true;
@@ -527,7 +519,7 @@ function advect(p) {
   }
   if (dead) spawnParticle(p);
 
-  return {skip: p.skip};
+  return seg;
 }
 
 rebuildSources();   // 纯 JS，不碰 p5，可以在顶层跑
@@ -548,6 +540,29 @@ function currentDensity() {
   return Math.min(window.devicePixelRatio || 1, 2);
 }
 
+/* 累积层：按半分辨率创建，放大回画布时自带一点柔和 */
+function makeTrail() {
+  if (trail) trail.remove();
+  trail = createGraphics(Math.max(1, Math.round(W * TRAIL_SCALE)),
+                         Math.max(1, Math.round(H * TRAIL_SCALE)));
+  trail.pixelDensity(1);
+  trail.background(0);
+}
+
+/* 关键：用「向下取整」而不是四舍五入来衰减。
+   否则暗部会卡在 round(v*k) == v 上，永远到不了纯黑。 */
+function fadeTrail() {
+  const k = Math.max(0, 1 - TRAIL_ALPHA / 255);
+  trail.loadPixels();
+  const d = trail.pixels;
+  for (let i = 0; i < d.length; i += 4) {
+    d[i]     = (d[i]     * k) | 0;
+    d[i + 1] = (d[i + 1] * k) | 0;
+    d[i + 2] = (d[i + 2] * k) | 0;
+  }
+  trail.updatePixels();
+}
+
 function setup() {
   // 先量画布，再决定用哪套场景（装载时要用到 W/H）
   const [w, h] = fitStage();
@@ -566,6 +581,8 @@ function setup() {
 
   // 必须等 p5 就绪后再初始化粒子：spawnParticle 用到 p5 的 random()
   initParticles();
+
+  makeTrail();
 
   buildPanel();
   attachPointer();
@@ -602,39 +619,39 @@ function windowResized() {
   }
 
   resizeCanvas(W, H);
+  makeTrail();
 }
 
 function draw() {
-  // 每帧整块清成纯黑 —— 没有任何残留，这就是「真黑」的来源
-  background(BG[0], BG[1], BG[2]);
-
   if (drag.kind === 'charge' && drag.idx >= CHARGES.length) drag = NO_DRAG();
   if (drag.kind === 'plate' && drag.idx >= PLATES.length) drag = NO_DRAG();
 
-  push();
-  translate(W / 2, H / 2);
-  noFill();
-  strokeCap(ROUND);
-  strokeWeight(1.3);
+  // ① 累积层：先做「向下取整」衰减，再把这一帧的线段画上去
+  fadeTrail();
+
+  trail.push();
+  trail.scale(TRAIL_SCALE);
+  trail.translate(W / 2, H / 2);
+  trail.strokeCap(ROUND);
+  trail.strokeWeight(1.6);
 
   for (let i = 0; i < particles.length; i++) {
-    const p = particles[i];
-    advect(p);
-
-    const h = p.hist;
-    if (h.length < 4) continue;          // 刚重生的粒子先不画
-
-    stroke(p.rgb[0], p.rgb[1], p.rgb[2], p.alpha);
-    beginShape();
-    for (let k = 0; k < h.length; k += 2) vertex(h[k], h[k + 1]);
-    endShape();
+    const s = advect(particles[i]);
+    if (s.skip) continue;
+    trail.stroke(s.rgb[0], s.rgb[1], s.rgb[2], s.a);
+    trail.line(s.x0, s.y0, s.x1, s.y1);
   }
+  trail.pop();
 
-  // 静态元素画在粒子之上
+  // ② 主画布：整块清黑，再把累积层放大贴上来
+  background(BG[0], BG[1], BG[2]);
+  image(trail, 0, 0, W, H);
+
+  push();
+  translate(W / 2, H / 2);
   drawPlates();
   drawCharges();
   drawLabels();
-
   pop();
 
   updateCursor();
@@ -856,7 +873,7 @@ function setPair(rangeId, numId, v) {
 function buildPanel() {
   setPair('np', 'npn', N_PARTICLES);
   bindPair($('np'), $('npn'), v => setParticleCount(Math.round(v)));
-  bindPair($('trl'), $('trln'), v => setTail(v));
+  bindPair($('trl'), $('trln'), v => { TRAIL_ALPHA = 20 - v * 0.17; });
   bindPair($('spd'), $('spdn'), v => { SPEED = v; });
 
   $('add').addEventListener('click', addCharge);
@@ -1019,8 +1036,8 @@ function resetAll() {
   const np0 = MODE === 'tall' ? 700 : 1400;
   setPair('np', 'npn', np0);
   setPair('spd', 'spdn', 3.4);
-  setPair('trl', 'trln', 34);
-  setTail(34);
+  setPair('trl', 'trln', 70);
+  TRAIL_ALPHA = 20 - 70 * 0.17;
 
   rebuildSources();
   setParticleCount(np0);
