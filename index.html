@@ -32,6 +32,7 @@
   #stage {
     flex: 1 1 auto;
     min-width: 0;
+    min-height: 0;
     display: grid;
     place-items: center;
     padding: 16px;
@@ -142,6 +143,36 @@
     color: #4a4a52; letter-spacing: .6px;
     pointer-events: none; user-select: none;
   }
+
+  /* ---------------- 手机：上显示、下设置 ---------------- */
+  @media (max-width: 760px) {
+    /* 100dvh 在支持的浏览器里会扣掉地址栏，写在后面覆盖前面 */
+    body { flex-direction: column; height: 100vh; height: 100dvh; }
+
+    #stage {
+      flex: 1 1 auto;
+      padding: 8px;
+    }
+
+    #panel {
+      flex: 0 0 46vh;
+      width: 100%;
+      height: 46vh;
+      flex: 0 0 46dvh;      /* 不支持的浏览器会忽略这两行，保留上面的 vh */
+      height: 46dvh;
+      border-left: none;
+      border-top: 1px solid #1c1c1f;
+      padding: 10px 14px 40px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    #panel h1 { font-size: 13px; }
+    #panel .sub { margin-bottom: 0; }
+
+    /* 底部被面板占了，版本号挪到右上 */
+    #ver { left: auto; right: 12px; top: 10px; bottom: auto; }
+    #err { bottom: auto; top: 34px; }
+  }
 </style>
 </head>
 <body>
@@ -180,7 +211,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.2</div>
+<div id="ver">v0.0.4</div>
 
 <script>
 /* =====================================================================
@@ -192,14 +223,40 @@
                 Ey = kλ (b/rb − a/ra) / y
    ===================================================================== */
 
-/* 设计空间固定 1600×900：电荷/平板的坐标、粒子的边界、场线长度都按这套单位写。
-   实际画布尺寸随窗口变化，靠 S 把设计空间等比缩放居中。 */
-const DESIGN_W = 1600, DESIGN_H = 900, R0 = 100;
-let W = DESIGN_W, H = DESIGN_H;   // 画布实际 CSS 尺寸
-let S = 1;                        // 设计空间 → 画布的缩放系数
+/* 两套场景：宽屏（横向）和手机（纵向）。
+   坐标写成「参考尺寸下的像素」（refW × refH），装载时折算成 0~1 的比例，
+   渲染时再乘回画布尺寸 —— 这样画布怎么变，内容都铺满，不留空边。 */
+const LAYOUTS = {
+  wide: {
+    refW: 1600, refH: 900,
+    charges: [
+      {x: -470, y: -180, q:  1.00, color: '#b48a84'},
+      {x:  170, y: -260, q: -1.30, color: '#8094a6'},
+      {x:  600, y:  120, q:  0.70, color: '#96a688'},
+    ],
+    plates: [{x: 0, y: 210, len: 620, lambda: 0.55, color: '#8a8f96'}],
+  },
+  tall: {
+    refW: 440, refH: 640,
+    charges: [
+      {x: -105, y: -140, q:  1.00, color: '#b48a84'},
+      {x:   55, y: -195, q: -1.30, color: '#8094a6'},
+      {x:  135, y:   70, q:  0.70, color: '#96a688'},
+    ],
+    plates: [{x: 0, y: 225, len: 220, lambda: 0.55, color: '#8a8f96'}],
+  },
+};
+
+const MOBILE_QUERY = '(max-width: 760px)';
+
+let MODE = 'wide';
+
+let W = 1600, H = 900;            // 画布实际 CSS 尺寸（世界坐标就是它）
+let R0 = W / 16;                  // 长度尺度：跟着画布宽度走
+let UNIT = R0 / 100;              // 相对参考尺寸的单位比，用来缩放流速
 
 const TAU = Math.PI * 2;
-const BG = [6, 6, 8];            // 背景保持黑
+const BG = [0, 0, 0];             // 纯黑背景，拖尾最终收敛到全黑
 
 /* ---------------- 莫兰迪色系 ---------------- */
 /* 低饱和 + 灰度底子；亮度压到 60% 左右，在纯黑背景上才立得住 */
@@ -215,17 +272,45 @@ const MORANDI = [
 ];
 
 /* ---------------- 可编辑状态 ---------------- */
-const DEFAULT_CHARGES = [
-  {x: -470, y: -180, q:  1.00, color: '#b48a84'},
-  {x:  170, y: -260, q: -1.30, color: '#8094a6'},
-  {x:  600, y:  120, q:  0.70, color: '#96a688'},
-];
-const DEFAULT_PLATES = [
-  {x: 0, y: 210, len: 620, lambda: 0.55, color: '#8a8f96'},
-];
+let CHARGES = LAYOUTS.wide.charges.map(c => ({...c}));
+let PLATES  = LAYOUTS.wide.plates.map(p => ({...p}));
 
-let CHARGES = DEFAULT_CHARGES.map(c => ({...c}));
-let PLATES  = DEFAULT_PLATES.map(p => ({...p}));
+/* 按模式装载默认场景：参考像素 → 比例 */
+function loadScene(mode) {
+  const L = LAYOUTS[mode];
+  CHARGES = L.charges.map(c => ({...c, nx: c.x / L.refW, ny: c.y / L.refH}));
+  PLATES  = L.plates.map(p => ({...p,
+    nx: p.x / L.refW, ny: p.y / L.refH, nlen: p.len / L.refW}));
+  syncLayout();
+}
+
+/* 比例 → 画布像素。窗口尺寸变化后调用，内容会自动重新铺满 */
+function syncLayout() {
+  R0 = W / 16;
+  UNIT = R0 / 100;
+  for (const c of CHARGES) {
+    c.x = c.nx * W;
+    c.y = c.ny * H;
+  }
+  for (const p of PLATES) {
+    p.x = p.nx * W;
+    p.y = p.ny * H;
+    p.len = p.nlen * W;
+  }
+}
+
+/* 画布像素 → 比例。拖动、改长度之后调用，记住布局 */
+function captureLayout() {
+  for (const c of CHARGES) {
+    c.nx = c.x / W;
+    c.ny = c.y / H;
+  }
+  for (const p of PLATES) {
+    p.nx = p.x / W;
+    p.ny = p.y / H;
+    p.nlen = p.len / W;
+  }
+}
 
 let N_PARTICLES = 1400;
 let SPEED = 3.4;
@@ -242,7 +327,7 @@ let hover = NO_DRAG();
 
 const HIT_R     = 38;    // 电荷抓取半径
 const PLATE_HIT = 22;    // 平板抓取距离
-const MARGIN    = 60;
+const marginPx  = () => Math.max(12, W * 0.037);
 const pointer   = {x: 0, y: 0};
 
 let particles = [];
@@ -345,8 +430,8 @@ function spawnParticle(p) {
   const src = pickSource();
 
   if (!src) {
-    p.x = random(-DESIGN_W / 2, DESIGN_W / 2);
-    p.y = random(-DESIGN_H / 2, DESIGN_H / 2);
+    p.x = random(-W / 2, W / 2);
+    p.y = random(-H / 2, H / 2);
     p.rgb = [150, 150, 150];
     p.ch = 0;
   } else if (src.kind === 'charge') {
@@ -413,7 +498,7 @@ function advect(p) {
     return {skip: true};
   }
 
-  const step = SPEED * p.mul;
+  const step = SPEED * UNIT * p.mul;   // UNIT 让竖屏下的相对速度与宽屏一致
   const nx = p.x + (rx / m) * step;
   const ny = p.y + (ry / m) * step;
 
@@ -425,7 +510,7 @@ function advect(p) {
   p.life++;
 
   let dead = p.life > p.maxLife;
-  if (Math.abs(p.x) > DESIGN_W / 2 + 40 || Math.abs(p.y) > DESIGN_H / 2 + 40) dead = true;
+  if (Math.abs(p.x) > W / 2 + 40 || Math.abs(p.y) > H / 2 + 40) dead = true;
   for (let k = 0; k < CHARGES.length; k++) {
     const c = CHARGES[k];
     if (c.q !== 0 && Math.hypot(p.x - c.x, p.y - c.y) < 24) dead = true;
@@ -442,7 +527,7 @@ rebuildSources();   // 纯 JS，不碰 p5，可以在顶层跑
 /* 画布可用区域 = #stage 减去内边距 */
 function fitStage() {
   const el = document.getElementById('stage');
-  if (!el) return [DESIGN_W, DESIGN_H];
+  if (!el) return [W, H];
   const cs = getComputedStyle(el);
   const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
   const h = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
@@ -461,10 +546,14 @@ function makeTrail() {
 }
 
 function setup() {
+  // 先量画布，再决定用哪套场景（装载时要用到 W/H）
   const [w, h] = fitStage();
   W = w;
   H = h;
-  S = Math.min(W / DESIGN_W, H / DESIGN_H);
+
+  MODE = window.matchMedia(MOBILE_QUERY).matches ? 'tall' : 'wide';
+  loadScene(MODE);        // 内部会 syncLayout()
+  rebuildSources();
 
   cnv = createCanvas(W, H);
   cnv.parent('stage');
@@ -480,15 +569,35 @@ function setup() {
   attachPointer();
 }
 
-/* 窗口尺寸变了就重算画布和缩放 */
+/* 横竖布局切换：换一套场景和默认摆位 */
+function setMode(next) {
+  if (next === MODE) return;
+  MODE = next;
+  loadScene(MODE);
+  rebuildSources();
+  renderAll();
+}
+
+/* 窗口尺寸变了就重算画布，内容按比例重新铺满 */
 function windowResized() {
   if (!trail) return;
+
+  const next = window.matchMedia(MOBILE_QUERY).matches ? 'tall' : 'wide';
+  const modeChanged = next !== MODE;
+
   const [w, h] = fitStage();
-  if (w === W && h === H) return;
+  // 布局切换了就得无条件重算，不受尺寸是否相同影响
+  if (!modeChanged && w === W && h === H) return;
 
   W = w;
   H = h;
-  S = Math.min(W / DESIGN_W, H / DESIGN_H);
+
+  if (modeChanged) {
+    setMode(next);        // loadScene 里会 syncLayout
+  } else {
+    syncLayout();         // 只改尺寸：保持相对布局，重新铺满
+    rebuildSources();
+  }
 
   resizeCanvas(W, H);
   makeTrail();          // 拖尾层尺寸变了，只能重建（会清空累积的场线）
@@ -501,7 +610,6 @@ function draw() {
   // 粒子坐标是设计空间（原点在中心），trail 原点在左上角，必须做同样的变换
   trail.push();
   trail.translate(W / 2, H / 2);
-  trail.scale(S);
   trail.strokeCap(ROUND);
   trail.strokeWeight(1.25);
 
@@ -522,13 +630,11 @@ function draw() {
 
   push();
   translate(W / 2, H / 2);
-  scale(S);
   drawPlates();
   drawCharges();
   drawLabels();
   pop();
 
-  drawCaption();
   updateCursor();
 }
 
@@ -622,36 +728,14 @@ function drawLabels() {
   }
 }
 
-function drawCaption() {
-  noStroke();
-
-  const a = '电场线从正电荷与平板表面流出，终止于负电荷或延伸至无穷远';
-  textSize(17);
-  textAlign(LEFT, TOP);
-  const wa = textWidth(a);
-  fill(0, 0, 0, 190);
-  rect(24, 20, wa + 28, 36, 9);
-  fill(110, 104, 98);
-  text(a, 38, 30);
-
-  const b = '线的疏密对应场强 · 颜色对应源头';
-  textSize(15);
-  textAlign(RIGHT, BOTTOM);
-  const wb = textWidth(b);
-  fill(0, 0, 0, 190);
-  rect(W - 37 - wb - 26, H - 56, wb + 26, 32, 9);
-  fill(110, 104, 98);
-  text(b, W - 37, H - 32);
-}
-
 /* ===================== 指针交互 ===================== */
 function pointerToWorld(ev) {
   const r = cnv.elt.getBoundingClientRect();
   if (!r.width || !r.height) return {x: 0, y: 0};
-  // 屏幕坐标 → 画布 CSS 像素（兼容 CSS 缩放）→ 反解绘制变换 → 设计空间
+  // 屏幕坐标 → 画布 CSS 像素（兼容 CSS 缩放）→ 以中心为原点
   const px = ((ev.clientX - r.left) / r.width) * W;
   const py = ((ev.clientY - r.top) / r.height) * H;
-  return {x: (px - W / 2) / S, y: (py - H / 2) / S};
+  return {x: px - W / 2, y: py - H / 2};
 }
 
 function distToPlate(wx, wy, pl) {
@@ -659,12 +743,12 @@ function distToPlate(wx, wy, pl) {
   return Math.hypot(wx - hx, wy - pl.y);
 }
 
-/* 画布缩小时，抓取半径要按屏幕像素补偿，否则小窗口里点不中 */
+/* 世界坐标就是画布像素，抓取半径直接用像素，不需要再换算 */
 function hitRadius() {
-  return Math.max(HIT_R, 24 / S);
+  return HIT_R;
 }
 function plateHit() {
-  return Math.max(PLATE_HIT, 14 / S);
+  return PLATE_HIT;
 }
 
 /* 电荷优先（体积小、压在上层），再找平板 */
@@ -716,8 +800,14 @@ function attachPointer() {
     if (drag.kind) {
       const item = drag.kind === 'charge' ? CHARGES[drag.idx] : PLATES[drag.idx];
       if (item) {
-        item.x = clamp(p.x + drag.dx, -DESIGN_W / 2 + MARGIN, DESIGN_W / 2 - MARGIN);
-        item.y = clamp(p.y + drag.dy, -DESIGN_H / 2 + MARGIN, DESIGN_H / 2 - MARGIN);
+        // 平板要按自身半长限制，否则长板会被拖出画布
+        const m = marginPx();
+        const half = drag.kind === 'plate' ? item.len / 2 : 0;
+        const limX = Math.max(0, W / 2 - m - half);
+        const limY = Math.max(0, H / 2 - m);
+        item.x = clamp(p.x + drag.dx, -limX, limX);
+        item.y = clamp(p.y + drag.dy, -limY, limY);
+        captureLayout();      // 记住相对位置，窗口变化时按比例还原
         ev.preventDefault();
       }
     }
@@ -887,33 +977,38 @@ function renderAll() {
 
 function addCharge() {
   if (CHARGES.length >= MAX_CHARGES) return;
+  const mx = Math.max(40, W * 0.16);
+  const my = Math.max(40, H * 0.16);
   CHARGES.push({
-    x: random(-DESIGN_W / 2 + 240, DESIGN_W / 2 - 240),
-    y: random(-DESIGN_H / 2 + 210, DESIGN_H / 2 - 210),
+    x: random(-W / 2 + mx, W / 2 - mx),
+    y: random(-H / 2 + my, H / 2 - my),
     q: random() < 0.5 ? 1 : -1,
     color: MORANDI[CHARGES.length % MORANDI.length],
   });
+  captureLayout();
   rebuildSources();
   renderAll();
 }
 
 function addPlate() {
   if (PLATES.length >= MAX_PLATES) return;
-  const len = Math.round(random(280, 560) / 10) * 10;
+  const len = Math.round(clamp(random(0.3, 0.55) * W, 160, 1100) / 10) * 10;
+  const mx = Math.max(40, W * 0.12);
+  const my = Math.max(40, H * 0.16);
   PLATES.push({
-    x: random(-DESIGN_W / 2 + 320, DESIGN_W / 2 - 320),
-    y: random(-DESIGN_H / 2 + 200, DESIGN_H / 2 - 200),
+    x: random(-W / 2 + mx, W / 2 - mx),
+    y: random(-H / 2 + my, H / 2 - my),
     len,
     lambda: Math.round(random(0.35, 0.8) * 20) / 20,
     color: MORANDI[(PLATES.length + 5) % MORANDI.length],
   });
+  captureLayout();
   rebuildSources();
   renderAll();
 }
 
 function resetAll() {
-  CHARGES = DEFAULT_CHARGES.map(c => ({...c}));
-  PLATES  = DEFAULT_PLATES.map(p => ({...p}));
+  loadScene(MODE);
   SPEED = 3.4;
   drag = NO_DRAG();
   hover = NO_DRAG();

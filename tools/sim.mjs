@@ -35,10 +35,10 @@ function random(a, b) {
 
 const factory = new Function(
   prelude + code +
-  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, DESIGN_W, DESIGN_H, TRAIL_ALPHA};',
+  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA};',
 );
 
-const {particles, advect, sources, CHARGES, PLATES, DESIGN_W: W, DESIGN_H: H, TRAIL_ALPHA} = factory();
+const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA} = factory();
 
 const NC = Math.max(1, sources.length);
 const SCALE = W / GW;
