@@ -1,5 +1,6 @@
 # 由 tools/sim.mjs 生成的中间产物
 tools/density.bin
+tools/scene.json
 
 # Python
 __pycache__/
