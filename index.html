@@ -38,10 +38,6 @@
   }
   #stage canvas {
     display: block;
-    width: auto !important;          /* p5 可能写死 inline 尺寸，这里强制按比例缩放 */
-    height: auto !important;
-    max-width: 100%;
-    max-height: calc(100vh - 32px);
     border-radius: 10px;
     box-shadow: 0 24px 70px rgba(0, 0, 0, .85);
   }
@@ -133,10 +129,18 @@
   .note { font-size: 10.5px; color: #5c5650; line-height: 1.6; margin: 10px 0 0; }
 
   #err {
-    display: none; position: fixed; left: 12px; bottom: 12px; z-index: 99;
+    display: none; position: fixed; left: 16px; bottom: 44px; z-index: 99;
     max-width: 56vw; padding: 10px 14px; white-space: pre-wrap;
     background: #2a1616; color: #e8a6a6; border: 1px solid #532626;
     border-radius: 8px; font: 12px/1.6 ui-monospace, Consolas, monospace;
+  }
+
+  /* 左下角版本号 */
+  #ver {
+    position: fixed; left: 16px; bottom: 12px; z-index: 50;
+    font: 11px/1 ui-monospace, Consolas, monospace;
+    color: #4a4a52; letter-spacing: .6px;
+    pointer-events: none; user-select: none;
   }
 </style>
 </head>
@@ -175,6 +179,9 @@
   <p class="note">电荷量为正时向外发射场线，为负时吸收；为 0 不参与计算。<br>平板 λ 为 0 时不再发射场线，但仍然可以拖动。</p>
 </aside>
 
+<!-- 版本号：只在这里改 -->
+<div id="ver">v0.0.2</div>
+
 <script>
 /* =====================================================================
    电磁场可视化 —— 若干有限长带电平板 + 若干可拖动的点电荷
@@ -185,7 +192,12 @@
                 Ey = kλ (b/rb − a/ra) / y
    ===================================================================== */
 
-const W = 1600, H = 900, R0 = 100;
+/* 设计空间固定 1600×900：电荷/平板的坐标、粒子的边界、场线长度都按这套单位写。
+   实际画布尺寸随窗口变化，靠 S 把设计空间等比缩放居中。 */
+const DESIGN_W = 1600, DESIGN_H = 900, R0 = 100;
+let W = DESIGN_W, H = DESIGN_H;   // 画布实际 CSS 尺寸
+let S = 1;                        // 设计空间 → 画布的缩放系数
+
 const TAU = Math.PI * 2;
 const BG = [6, 6, 8];            // 背景保持黑
 
@@ -333,8 +345,8 @@ function spawnParticle(p) {
   const src = pickSource();
 
   if (!src) {
-    p.x = random(-W / 2, W / 2);
-    p.y = random(-H / 2, H / 2);
+    p.x = random(-DESIGN_W / 2, DESIGN_W / 2);
+    p.y = random(-DESIGN_H / 2, DESIGN_H / 2);
     p.rgb = [150, 150, 150];
     p.ch = 0;
   } else if (src.kind === 'charge') {
@@ -413,7 +425,7 @@ function advect(p) {
   p.life++;
 
   let dead = p.life > p.maxLife;
-  if (Math.abs(p.x) > W / 2 + 40 || Math.abs(p.y) > H / 2 + 40) dead = true;
+  if (Math.abs(p.x) > DESIGN_W / 2 + 40 || Math.abs(p.y) > DESIGN_H / 2 + 40) dead = true;
   for (let k = 0; k < CHARGES.length; k++) {
     const c = CHARGES[k];
     if (c.q !== 0 && Math.hypot(p.x - c.x, p.y - c.y) < 24) dead = true;
@@ -426,30 +438,70 @@ function advect(p) {
 rebuildSources();   // 纯 JS，不碰 p5，可以在顶层跑
 
 /* ===================== p5 ===================== */
+
+/* 画布可用区域 = #stage 减去内边距 */
+function fitStage() {
+  const el = document.getElementById('stage');
+  if (!el) return [DESIGN_W, DESIGN_H];
+  const cs = getComputedStyle(el);
+  const w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const h = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  return [Math.max(320, Math.round(w)), Math.max(240, Math.round(h))];
+}
+
+function currentDensity() {
+  return Math.min(window.devicePixelRatio || 1, 2);
+}
+
+function makeTrail() {
+  if (trail) trail.remove();
+  trail = createGraphics(W, H);
+  trail.pixelDensity(currentDensity());
+  trail.background(BG[0], BG[1], BG[2]);
+}
+
 function setup() {
+  const [w, h] = fitStage();
+  W = w;
+  H = h;
+  S = Math.min(W / DESIGN_W, H / DESIGN_H);
+
   cnv = createCanvas(W, H);
   cnv.parent('stage');
-  pixelDensity(1);
+  pixelDensity(currentDensity());
   randomSeed(7);
 
   // 必须等 p5 就绪后再初始化粒子：spawnParticle 用到 p5 的 random()
   initParticles();
 
-  trail = createGraphics(W, H);
-  trail.pixelDensity(1);
-  trail.background(BG[0], BG[1], BG[2]);
+  makeTrail();
 
   buildPanel();
   attachPointer();
+}
+
+/* 窗口尺寸变了就重算画布和缩放 */
+function windowResized() {
+  if (!trail) return;
+  const [w, h] = fitStage();
+  if (w === W && h === H) return;
+
+  W = w;
+  H = h;
+  S = Math.min(W / DESIGN_W, H / DESIGN_H);
+
+  resizeCanvas(W, H);
+  makeTrail();          // 拖尾层尺寸变了，只能重建（会清空累积的场线）
 }
 
 function draw() {
   // ① 拖尾层：不清空，只按 alpha 衰减
   trail.background(BG[0], BG[1], BG[2], TRAIL_ALPHA);
 
-  // 粒子坐标以画布中心为原点，trail 原点在左上角，必须做同样的平移
+  // 粒子坐标是设计空间（原点在中心），trail 原点在左上角，必须做同样的变换
   trail.push();
   trail.translate(W / 2, H / 2);
+  trail.scale(S);
   trail.strokeCap(ROUND);
   trail.strokeWeight(1.25);
 
@@ -470,6 +522,7 @@ function draw() {
 
   push();
   translate(W / 2, H / 2);
+  scale(S);
   drawPlates();
   drawCharges();
   drawLabels();
@@ -595,10 +648,10 @@ function drawCaption() {
 function pointerToWorld(ev) {
   const r = cnv.elt.getBoundingClientRect();
   if (!r.width || !r.height) return {x: 0, y: 0};
-  return {
-    x: ((ev.clientX - r.left) / r.width) * W - W / 2,
-    y: ((ev.clientY - r.top) / r.height) * H - H / 2,
-  };
+  // 屏幕坐标 → 画布 CSS 像素（兼容 CSS 缩放）→ 反解绘制变换 → 设计空间
+  const px = ((ev.clientX - r.left) / r.width) * W;
+  const py = ((ev.clientY - r.top) / r.height) * H;
+  return {x: (px - W / 2) / S, y: (py - H / 2) / S};
 }
 
 function distToPlate(wx, wy, pl) {
@@ -606,9 +659,18 @@ function distToPlate(wx, wy, pl) {
   return Math.hypot(wx - hx, wy - pl.y);
 }
 
+/* 画布缩小时，抓取半径要按屏幕像素补偿，否则小窗口里点不中 */
+function hitRadius() {
+  return Math.max(HIT_R, 24 / S);
+}
+function plateHit() {
+  return Math.max(PLATE_HIT, 14 / S);
+}
+
 /* 电荷优先（体积小、压在上层），再找平板 */
 function pickAt(wx, wy) {
-  let best = -1, bestD = HIT_R;
+  const hr = hitRadius();
+  let best = -1, bestD = hr;
   for (let i = 0; i < CHARGES.length; i++) {
     const d = Math.hypot(wx - CHARGES[i].x, wy - CHARGES[i].y);
     if (d < bestD) {
@@ -618,8 +680,9 @@ function pickAt(wx, wy) {
   }
   if (best >= 0) return {kind: 'charge', idx: best, dx: 0, dy: 0};
 
+  const ph = plateHit();
   for (let i = 0; i < PLATES.length; i++) {
-    if (distToPlate(wx, wy, PLATES[i]) < PLATE_HIT) return {kind: 'plate', idx: i, dx: 0, dy: 0};
+    if (distToPlate(wx, wy, PLATES[i]) < ph) return {kind: 'plate', idx: i, dx: 0, dy: 0};
   }
   return NO_DRAG();
 }
@@ -653,8 +716,8 @@ function attachPointer() {
     if (drag.kind) {
       const item = drag.kind === 'charge' ? CHARGES[drag.idx] : PLATES[drag.idx];
       if (item) {
-        item.x = clamp(p.x + drag.dx, -W / 2 + MARGIN, W / 2 - MARGIN);
-        item.y = clamp(p.y + drag.dy, -H / 2 + MARGIN, H / 2 - MARGIN);
+        item.x = clamp(p.x + drag.dx, -DESIGN_W / 2 + MARGIN, DESIGN_W / 2 - MARGIN);
+        item.y = clamp(p.y + drag.dy, -DESIGN_H / 2 + MARGIN, DESIGN_H / 2 - MARGIN);
         ev.preventDefault();
       }
     }
@@ -825,8 +888,8 @@ function renderAll() {
 function addCharge() {
   if (CHARGES.length >= MAX_CHARGES) return;
   CHARGES.push({
-    x: random(-W / 2 + 240, W / 2 - 240),
-    y: random(-H / 2 + 210, H / 2 - 210),
+    x: random(-DESIGN_W / 2 + 240, DESIGN_W / 2 - 240),
+    y: random(-DESIGN_H / 2 + 210, DESIGN_H / 2 - 210),
     q: random() < 0.5 ? 1 : -1,
     color: MORANDI[CHARGES.length % MORANDI.length],
   });
@@ -838,8 +901,8 @@ function addPlate() {
   if (PLATES.length >= MAX_PLATES) return;
   const len = Math.round(random(280, 560) / 10) * 10;
   PLATES.push({
-    x: random(-W / 2 + 320, W / 2 - 320),
-    y: random(-H / 2 + 200, H / 2 - 200),
+    x: random(-DESIGN_W / 2 + 320, DESIGN_W / 2 - 320),
+    y: random(-DESIGN_H / 2 + 200, DESIGN_H / 2 - 200),
     len,
     lambda: Math.round(random(0.35, 0.8) * 20) / 20,
     color: MORANDI[(PLATES.length + 5) % MORANDI.length],
