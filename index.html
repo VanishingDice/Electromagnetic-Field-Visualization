@@ -4,6 +4,19 @@
 <meta charset="utf-8" />
 <title>电磁场可视化</title>
 <script src="https://cdn.jsdelivr.net/npm/p5@2.3.4/lib/p5.min.js"></script>
+<script>
+  /* 出错时把信息显示在页面上，否则画布黑掉会毫无线索 */
+  window.addEventListener('error', function (e) {
+    var d = document.getElementById('err');
+    if (!d) {
+      d = document.createElement('div');
+      d.id = 'err';
+      document.body.appendChild(d);
+    }
+    d.style.display = 'block';
+    d.textContent += (d.textContent ? '\n' : '') + '脚本错误：' + e.message;
+  });
+</script>
 <style>
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
@@ -110,6 +123,13 @@
   .btn:disabled { opacity: .4; cursor: not-allowed; }
 
   .note { font-size: 10.5px; color: #5c5650; line-height: 1.6; margin: 10px 0 0; }
+
+  #err {
+    display: none; position: fixed; left: 12px; bottom: 12px; z-index: 99;
+    max-width: 56vw; padding: 10px 14px; white-space: pre-wrap;
+    background: #2a1616; color: #e8a6a6; border: 1px solid #532626;
+    border-radius: 8px; font: 12px/1.6 ui-monospace, Consolas, monospace;
+  }
 </style>
 </head>
 <body>
@@ -376,8 +396,7 @@ function advect(p) {
   return seg;
 }
 
-rebuildSources();
-initParticles();
+rebuildSources();   // 纯 JS，不碰 p5，可以在顶层跑
 
 /* ===================== p5 ===================== */
 function setup() {
@@ -385,6 +404,9 @@ function setup() {
   cnv.parent('stage');
   pixelDensity(1);
   randomSeed(7);
+
+  // 必须等 p5 就绪后再初始化粒子：spawnParticle 用到 p5 的 random()
+  initParticles();
 
   trail = createGraphics(W, H);
   trail.pixelDensity(1);

@@ -35,7 +35,7 @@ function random(a, b) {
 
 const factory = new Function(
   prelude + code +
-  '\n;return {particles, advect, sources, CHARGES, PLATE, W, H, TRAIL_ALPHA};',
+  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATE, W, H, TRAIL_ALPHA};',
 );
 
 const {particles, advect, sources, CHARGES, PLATE, W, H, TRAIL_ALPHA} = factory();
