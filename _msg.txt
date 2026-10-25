@@ -1,9 +1,0 @@
-补 viewport meta，修复手机端不切底部布局
-
-页面缺少 <meta name="viewport">，手机浏览器会用约 980px 的虚拟布局宽度排版
-再整体缩放，导致 @media (max-width: 760px) 永远不命中——桌面缩放正常，
-但在手机上控件仍留在右侧。
-
-- 加入 width=device-width, initial-scale=1, viewport-fit=cover
-- 配合 viewport-fit=cover 补上 safe-area 内边距，避开刘海与home指示条
-- 版本 v0.0.8
