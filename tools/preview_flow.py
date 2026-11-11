@@ -106,12 +106,7 @@ for pl in scene.get("plates", []):
     px, py, plen = pl["x"], pl["y"], pl["len"]
     prgb = tuple(pl["rgb"])
 
-    for i in range(6, 0, -1):
-        d.rounded_rectangle(
-            [X(px - plen / 2 - i * 3), Y(py - 9 - i * 2),
-             X(px + plen / 2 + i * 3), Y(py + 9 + i * 2)],
-            radius=8, fill=prgb + (9,),
-        )
+    # 和页面一致：去掉多层光晕
     d.rounded_rectangle(
         [X(px - plen / 2), Y(py - 9), X(px + plen / 2), Y(py + 9)],
         radius=7, fill=(12, 12, 14, 255), outline=prgb + (185,), width=2,
@@ -134,10 +129,7 @@ for c in scene["charges"]:
     rgb = tuple(c["rgb"])
     r = 11 + min(abs(q), 2.6) * 6
 
-    for k in range(7, 0, -1):
-        rr = r + k * 6.5
-        d.ellipse([X(cx - rr), Y(cy - rr), X(cx + rr), Y(cy + rr)], fill=rgb + (11,))
-
+    # 和页面一致：只画实心圆，不叠多层光晕
     d.ellipse([X(cx - r), Y(cy - r), X(cx + r), Y(cy + r)], fill=rgb)
     glyph = "+" if q > 0 else ("\u2212" if q < 0 else "\u00b7")
     d.text((X(cx), Y(cy + 1)), glyph,
