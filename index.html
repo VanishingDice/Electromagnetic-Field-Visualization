@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.18</div>
+<div id="ver">v0.0.19</div>
 
 <script>
 /* =====================================================================
@@ -317,6 +317,7 @@ function loadScene(mode) {
 
 /* 比例 → 画布像素。窗口尺寸变化后调用，内容会自动重新铺满 */
 function syncLayout() {
+  potDirty = true;
   R0 = W / 16;
   UNIT = R0 / 100;
   for (const c of CHARGES) {
@@ -362,6 +363,14 @@ const SINK_R = 5;               // 负电荷的吸收半径（要贴得很近才
 const PLATE_R = 10;             // 极板的吸收半径（板半高 9，只多留 1px）
 const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比例
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
+
+/* 电势底色。声明必须放在 rebuildSources 之前——它在顶层就会被调用 */
+const POT_W = 240, POT_H = 135; // 低分辨率网格，放大插值变平滑
+const POT_MAX = 60;             // 最大加亮量（0~255），越小底色越含蓄
+const POT_V0 = 1.2;             // 半饱和值：V 等于它时映射到 0.5
+
+let potImg = null;
+let potDirty = true;
 
 let V0 = 2.5;                   // 轨迹模式：出射速度（px/帧）
 const EJECT_SPREAD = 0.28;      // 出射方向相对法线的角度抖动（rad，约 ±16°）
@@ -463,6 +472,7 @@ function fieldAt(px, py) {
 
 /* ---------------- 源头（谁在发射场线） ---------------- */
 function rebuildSources() {
+  potDirty = true;
   sources = [];
 
   for (let i = 0; i < CHARGES.length; i++) {
@@ -791,6 +801,8 @@ function setup() {
   loadScene(MODE);        // 内部会 syncLayout()
   rebuildSources();
 
+  potImg = createImage(POT_W, POT_H);
+
   cnv = createCanvas(W, H);
   cnv.parent('stage');
   pixelDensity(currentDensity());
@@ -843,6 +855,8 @@ function draw() {
   if (drag.kind === 'charge' && drag.idx >= CHARGES.length) drag = NO_DRAG();
   if (drag.kind === 'plate' && drag.idx >= PLATES.length) drag = NO_DRAG();
 
+  if (potDirty) updatePotential();
+
   if (VIEW === 'trajectory') drawTrajectories();
   else drawField();
 
@@ -854,6 +868,68 @@ function draw() {
   pop();
 
   updateCursor();
+}
+
+/* ---------------- 电势底色 ----------------
+   电势 V = Σ kq/r（点电荷）+ kλ·asinh 项（有限长线电荷）。
+   在电荷处 1/r 发散、跨度好几个数量级，所以用 V/(V+V0) 做饱和映射：
+   近处接近 1、远处趋近 0。只用「加亮」表达——黑色底上无法更暗。 */
+
+function potentialAt(px, py) {
+  const x = px / R0, y = py / R0;
+  let v = 0;
+
+  for (let i = 0; i < CHARGES.length; i++) {
+    const c = CHARGES[i];
+    if (!c.q) continue;
+    const dx = x - c.x / R0;
+    const dy = y - c.y / R0;
+    v += c.q / Math.max(Math.hypot(dx, dy), 0.12);
+  }
+
+  for (let i = 0; i < PLATES.length; i++) {
+    const pl = PLATES[i];
+    if (!pl.lambda) continue;
+    const L = pl.len / R0 / 2;
+    const xr = x - pl.x / R0;
+    const yy = Math.max(Math.abs(y - pl.y / R0), 0.06);
+    // ∫ dx'/√((x-x')²+y²) = asinh
+    v += pl.lambda * (Math.asinh((xr + L) / yy) - Math.asinh((xr - L) / yy));
+  }
+
+  return v;
+}
+
+/* 电势 → 亮度：先做饱和映射，再平方压暗远处，避免整屏发灰 */
+function potBrightness(v) {
+  if (!(v > 0)) return 0;
+  const t = v / (v + POT_V0);
+  return t * t * POT_MAX;
+}
+
+function updatePotential() {
+  if (!potImg) return;
+
+  potImg.loadPixels();
+  const d = potImg.pixels;
+
+  for (let j = 0; j < POT_H; j++) {
+    const wy = ((j + 0.5) / POT_H - 0.5) * H;
+    for (let i = 0; i < POT_W; i++) {
+      const wx = ((i + 0.5) / POT_W - 0.5) * W;
+      // 加半个色阶的抖动，避免 8 位量化在平缓区域留下等高线般的条带
+      const b = potBrightness(potentialAt(wx, wy)) + random(-0.5, 0.5);
+
+      const k = (j * POT_W + i) * 4;
+      d[k] = b;
+      d[k + 1] = b;
+      d[k + 2] = b;
+      d[k + 3] = 255;
+    }
+  }
+
+  potImg.updatePixels();
+  potDirty = false;
 }
 
 /* 场线：累积层每帧衰减 + 画增量线段 */
@@ -876,11 +952,20 @@ function drawField() {
 
   background(BG[0], BG[1], BG[2]);
   image(trail, 0, 0);
+
+  // 累积层是不透明的，底色只能叠加在上面
+  if (potImg) {
+    push();
+    blendMode(ADD);
+    image(potImg, 0, 0, W, H);
+    pop();
+  }
 }
 
 /* 真实轨迹：每帧重画，按粒子自己的路径点连折线（气泡室照片那种） */
 function drawTrajectories() {
   background(BG[0], BG[1], BG[2]);
+  if (potImg) image(potImg, 0, 0, W, H);
 
   // 逐段上色意味着每段都要一次 stroke，预算按「段数」算
   const budget = 30000;
@@ -1088,6 +1173,7 @@ function attachPointer() {
         item.x = clamp(p.x + drag.dx, -limX, limX);
         item.y = clamp(p.y + drag.dy, -limY, limY);
         captureLayout();      // 记住相对位置，窗口变化时按比例还原
+        potDirty = true;
         ev.preventDefault();
       }
     }

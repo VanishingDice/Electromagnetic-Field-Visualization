@@ -70,6 +70,21 @@ rgb = acc / s * tone
 img = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
 img = Image.fromarray(img, "RGB").resize((W, H), Image.BICUBIC)
 
+# ---------------------------------------------------------------- 电势底色（加亮）
+pot_path = os.path.join(HERE, "pot.bin")
+if os.path.exists(pot_path):
+    pot = np.fromfile(pot_path, dtype=np.uint8)
+    if pot.size:
+        # 尺寸从字节数反推，避免和页面里的常量写两遍
+        side = int(round((pot.size) ** 0.5))
+        ph = int(round(pot.size / 160)) if pot.size % 160 == 0 else side
+        pw = pot.size // ph if ph else side
+        if pw * ph == pot.size:
+            pim = Image.fromarray(pot.reshape(ph, pw), "L").resize((W, H), Image.BICUBIC)
+            base = np.asarray(img, np.int16)
+            add = np.asarray(pim, np.int16)[:, :, None]
+            img = Image.fromarray(np.clip(base + add, 0, 255).astype(np.uint8), "RGB")
+
 # ---------------------------------------------------------------- 静态元素
 d = ImageDraw.Draw(img, "RGBA")
 OX, OY = W // 2, H // 2
