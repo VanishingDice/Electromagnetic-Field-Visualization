@@ -35,10 +35,10 @@ function random(a, b) {
 
 const factory = new Function(
   prelude + code +
-  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA};',
+  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA, potentialAt, potBrightness, POT_W, POT_H};',
 );
 
-const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA} = factory();
+const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA, potentialAt, potBrightness, POT_W, POT_H} = factory();
 
 const decay = 1 - TRAIL_ALPHA / 255;
 
@@ -98,9 +98,22 @@ const scene = {
   colors: sources.map(s => s.rgb),
   charges: CHARGES.map(c => ({x: c.x, y: c.y, q: c.q, rgb: hexToRgb(c.color)})),
   plates: PLATES.map(p => ({x: p.x, y: p.y, len: p.len, lambda: p.lambda, rgb: hexToRgb(p.color)})),
+  potW: POT_W,
+  potH: POT_H,
 };
 
 fs.writeFileSync(path.join(HERE, 'scene.json'), JSON.stringify(scene, null, 2));
+
+// 电势底色：和页面用同一个 potentialAt()，输出 POT_W×POT_H 的亮度字节
+const pot = Buffer.alloc(POT_W * POT_H);
+for (let j = 0; j < POT_H; j++) {
+  const wy = ((j + 0.5) / POT_H - 0.5) * H;
+  for (let i = 0; i < POT_W; i++) {
+    const wx = ((i + 0.5) / POT_W - 0.5) * W;
+    pot[j * POT_W + i] = Math.round(potBrightness(potentialAt(wx, wy)) + (Math.random() - 0.5));
+  }
+}
+fs.writeFileSync(path.join(HERE, 'pot.bin'), pot);
 
 const stats = planes.map(p => {
   let mx = 0, sum = 0;
