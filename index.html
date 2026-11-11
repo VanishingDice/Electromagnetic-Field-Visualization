@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.20</div>
+<div id="ver">v0.0.21</div>
 
 <script>
 /* =====================================================================
@@ -365,10 +365,11 @@ const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 
 /* 电势底色。声明必须放在 rebuildSources 之前——它在顶层就会被调用 */
-const POT_W = 320, POT_H = 180; // 低分辨率网格，放大插值变平滑
-const POT_MAX = 80;             // 最大加亮量（0~255）
+const POT_W = 400, POT_H = 225; // 网格：4px 一格
+const POT_MAX = 100;            // 正电势方向的最高亮度（0~255）
+const POT_FLOOR = 26;           // 「无穷远」的亮度——不设成黑，给负电势留出向下的空间
 const POT_V0 = 0.6;             // 对数尺度：小 → 低电势区层次多；大 → 只剩近处亮
-const POT_REF = 6;              // 归一化参考电势，超过它就顶格
+const POT_VMAX = 20;            // 归一化上限：取得比峰值大，映射就不会被截断出平台
 
 let potImg = null;
 let potDirty = true;
@@ -885,8 +886,9 @@ function potentialAt(px, py) {
     if (!c.q) continue;
     const dx = x - c.x / R0;
     const dy = y - c.y / R0;
-    // 软截断：用 √(r²+ε²) 代替 max(r, ε)，避免在 ε 处留下折角
-    v += c.q / Math.sqrt(dx * dx + dy * dy + 0.0144);
+    // 软截断：用 √(r²+ε²) 代替 max(r, ε)。ε 取得比网格大一些，
+    // 近处的 1/r 尖峰被摊平，否则网格采样跟不上，放大后就是一格一格的阶梯
+    v += c.q / Math.sqrt(dx * dx + dy * dy + 0.0324);
   }
 
   for (let i = 0; i < PLATES.length; i++) {
@@ -903,11 +905,19 @@ function potentialAt(px, py) {
   return v;
 }
 
-/* 电势 → 亮度：取对数把 1/r 的长尾压平，远处也能分出层次 */
+/* 电势 → 亮度。
+   正电势从 POT_FLOOR 往上走，负电势往下走，这样「无穷远」落在一个中间值上，
+   两个方向都有显示空间。归一化常数取 POT_VMAX（比实际峰值大），
+   所以映射永远不会被截断——没有平台，也就没有阶梯。 */
+const POT_DENOM = Math.log1p(POT_VMAX / POT_V0);
+
 function potBrightness(v) {
-  if (!(v > 0)) return 0;
-  const t = Math.log1p(v / POT_V0) / Math.log1p(POT_REF / POT_V0);
-  return Math.min(1, t) * POT_MAX;
+  const t = Math.log1p(Math.abs(v) / POT_V0) / POT_DENOM;   // 0 起，恒小于 1
+
+  if (v >= 0) return POT_FLOOR + t * (POT_MAX - POT_FLOOR);
+
+  // 负电势：一路压到黑，1.7 倍速是为了让负电荷附近真正暗下去
+  return POT_FLOOR * Math.max(0, 1 - t * 1.7);
 }
 
 function updatePotential() {
