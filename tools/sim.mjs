@@ -35,14 +35,16 @@ function random(a, b) {
 
 const factory = new Function(
   prelude + code +
-  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA, potentialAt, potBrightness, POT_W, POT_H};',
+  '\n;initParticles(); return {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA, potentialAt, potBrightness, POT_W, POT_H, INFALL_RGB, CH_INFALL};',
 );
 
-const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA, potentialAt, potBrightness, POT_W, POT_H} = factory();
+const {particles, advect, sources, CHARGES, PLATES, W, H, TRAIL_ALPHA, potentialAt, potBrightness, POT_W, POT_H, INFALL_RGB, CH_INFALL} = factory();
 
 const decay = 1 - TRAIL_ALPHA / 255;
 
-const NC = Math.max(1, sources.length);
+// 多留一个通道给「自无穷远流入」的粒子，单独染色
+const NC = Math.max(1, sources.length) + 1;
+const CH_INF = NC - 1;
 const SCALE = W / GW;
 const planes = Array.from({length: NC}, () => new Float32Array(GW * GH));
 
@@ -75,7 +77,7 @@ for (let f = 0; f < FRAMES; f++) {
     const s = advect(particles[i]);
     if (s.skip) continue;
 
-    const ch = Math.min(s.ch | 0, NC - 1);
+    const ch = s.ch === CH_INFALL ? CH_INF : Math.min(s.ch | 0, CH_INF - 1);
     const w = (s.a / 255) * 0.06;
     const dx = s.x1 - s.x0, dy = s.y1 - s.y0;
     const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / (SCALE * 0.5)));
@@ -95,7 +97,7 @@ fs.writeFileSync(path.join(HERE, 'density.bin'), buf);
 const scene = {
   gw: GW,
   gh: GH,
-  colors: sources.map(s => s.rgb),
+  colors: [...sources.map(s => s.rgb), INFALL_RGB],
   charges: CHARGES.map(c => ({x: c.x, y: c.y, q: c.q, rgb: hexToRgb(c.color)})),
   plates: PLATES.map(p => ({x: p.x, y: p.y, len: p.len, lambda: p.lambda, rgb: hexToRgb(p.color)})),
   potW: POT_W,

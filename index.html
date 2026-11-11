@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.25</div>
+<div id="ver">v0.0.26</div>
 
 <script>
 /* =====================================================================
@@ -362,6 +362,8 @@ const MAX_V = 14;               // 速度上限（px/帧），必须高于出射
 const SINK_R = 5;               // 负电荷的吸收半径（要贴得很近才被吞）
 const PLATE_R = 10;             // 极板的吸收半径（板半高 9，只多留 1px）
 const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比例
+const INFALL_RGB = [170, 176, 186];   // 无穷远流入的专用色：中性冷灰，和 Morandi 源色分开
+const CH_INFALL = -1;                 // 专用通道号，离线预览据此单独染色
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 const GHOST_PER = 1;            // 每帧从尾端吃掉几个点：和画线的速率一致，回缩才不会「突然加速」
 const MAX_GHOSTS = 48;          // 同时保留的残影上限
@@ -513,27 +515,6 @@ function pickSource() {
 
 /* ---------------- 粒子 ---------------- */
 
-/* 最近的「源」——给从无穷远进来的粒子挑颜色用 */
-function nearestSource(x, y) {
-  let best = null, bestD = Infinity;
-  for (let i = 0; i < sources.length; i++) {
-    const s = sources[i];
-    let sx, sy;
-    if (s.kind === 'charge') {
-      const c = CHARGES[s.idx];
-      if (!c) continue;
-      sx = c.x; sy = c.y;
-    } else {
-      const pl = PLATES[s.idx];
-      if (!pl) continue;
-      sx = pl.x; sy = pl.y;
-    }
-    const d = Math.hypot(x - sx, y - sy);
-    if (d < bestD) { bestD = d; best = s; }
-  }
-  return best;
-}
-
 /* 从画布外的「无穷远」投放：取四次候选点，挑场最朝里指的那个 */
 function spawnFromInfinity(p) {
   const m = 30;
@@ -557,9 +538,8 @@ function spawnFromInfinity(p) {
   p.x = bx;
   p.y = by;
 
-  const s = nearestSource(p.x, p.y);
-  p.rgb = s ? s.rgb : [150, 150, 150];
-  p.ch = s ? s.ch : 0;
+  p.rgb = INFALL_RGB;     // 不和任何源共用颜色，一眼能看出它是从外面进来的
+  p.ch = CH_INFALL;
 }
 
 function spawnParticle(p) {
