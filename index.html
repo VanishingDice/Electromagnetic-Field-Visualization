@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.21</div>
+<div id="ver">v0.0.22</div>
 
 <script>
 /* =====================================================================
@@ -1024,12 +1024,8 @@ function drawPlates() {
                    (drag.kind === 'plate' && drag.idx === i);
     const x0 = pl.x - pl.len / 2, x1 = pl.x + pl.len / 2;
 
+    // 和电荷一样，去掉多层叠出来的光晕
     noStroke();
-    for (let k = 6; k > 0; k--) {
-      fill(rgb[0], rgb[1], rgb[2], active ? 14 : 9);
-      rect(x0 - k * 3, pl.y - 9 - k * 2, pl.len + k * 6, 18 + k * 4, 8);
-    }
-
     fill(12, 12, 14);
     stroke(rgb[0], rgb[1], rgb[2], active ? 255 : 185);
     strokeWeight(active ? 3 : 2);
@@ -1067,12 +1063,9 @@ function drawCharges() {
     const rgb = hexToRgb(c.color);
     const r = chargeRadius(c.q);
 
+    // 只画实心圆：原来那圈「光晕」是 7 层半透明圆盘叠出来的，
+    // 每层都有硬边界，叠起来就是一圈圈的阶梯
     noStroke();
-    for (let k = 7; k > 0; k--) {
-      fill(rgb[0], rgb[1], rgb[2], 11);
-      circle(c.x, c.y, r * 2 + k * 13);
-    }
-
     fill(rgb[0], rgb[1], rgb[2]);
     circle(c.x, c.y, r * 2);
 
