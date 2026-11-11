@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.16</div>
+<div id="ver">v0.0.17</div>
 
 <script>
 /* =====================================================================
@@ -358,8 +358,9 @@ let VIEW = 'field';
 /* 轨迹模式的物理参数：调这两个就能改弯曲程度 */
 const ACCEL = 0.03;             // 加速度系数：太大初速度会被抹平，太小轨迹就变直线
 const MAX_V = 14;               // 速度上限（px/帧），必须高于出射速度上限
-const SINK_R = 26;              // 负电荷的吸收半径
-const PLATE_R = 12;             // 极板的吸收半径（板半高 9，只多留 3px）
+const SINK_R = 18;              // 负电荷的吸收半径
+const PLATE_R = 10;             // 极板的吸收半径（板半高 9，只多留 1px）
+const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比例
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 
 let V0 = 2.5;                   // 轨迹模式：出射速度（px/帧）
@@ -496,32 +497,87 @@ function pickSource() {
 }
 
 /* ---------------- 粒子 ---------------- */
-function spawnParticle(p) {
-  const src = pickSource();
 
-  if (!src) {
-    p.x = random(-W / 2, W / 2);
-    p.y = random(-H / 2, H / 2);
-    p.rgb = [150, 150, 150];
-    p.ch = 0;
-  } else if (src.kind === 'charge') {
-    const c = CHARGES[src.idx];
-    if (!c) { p.x = 0; p.y = 0; p.rgb = src.rgb; p.ch = src.ch; }
-    else {
-      const a = random(TAU);
-      p.x = c.x + Math.cos(a) * 24;
-      p.y = c.y + Math.sin(a) * 24;
-      p.rgb = src.rgb;
-      p.ch = src.ch;
+/* 最近的「源」——给从无穷远进来的粒子挑颜色用 */
+function nearestSource(x, y) {
+  let best = null, bestD = Infinity;
+  for (let i = 0; i < sources.length; i++) {
+    const s = sources[i];
+    let sx, sy;
+    if (s.kind === 'charge') {
+      const c = CHARGES[s.idx];
+      if (!c) continue;
+      sx = c.x; sy = c.y;
+    } else {
+      const pl = PLATES[s.idx];
+      if (!pl) continue;
+      sx = pl.x; sy = pl.y;
     }
+    const d = Math.hypot(x - sx, y - sy);
+    if (d < bestD) { bestD = d; best = s; }
+  }
+  return best;
+}
+
+/* 从画布外的「无穷远」投放：取四次候选点，挑场最朝里指的那个 */
+function spawnFromInfinity(p) {
+  const m = 30;
+  let bx = 0, by = 0, bestDot = -Infinity;
+
+  for (let k = 0; k < 4; k++) {
+    const side = Math.floor(random(4));
+    let x, y, nx, ny;                       // nx/ny = 指向画布内的法向
+    if (side === 0)      { x = random(-W / 2 - m, W / 2 + m); y = -H / 2 - m; nx = 0;  ny = 1; }
+    else if (side === 1) { x = random(-W / 2 - m, W / 2 + m); y =  H / 2 + m; nx = 0;  ny = -1; }
+    else if (side === 2) { x = -W / 2 - m; y = random(-H / 2 - m, H / 2 + m); nx = 1;  ny = 0; }
+    else                 { x =  W / 2 + m; y = random(-H / 2 - m, H / 2 + m); nx = -1; ny = 0; }
+
+    const f = fieldAt(x, y);
+    const len = Math.hypot(f[0], f[1]);
+    if (!(len > 1e-9)) continue;
+    const dot = (f[0] / len) * nx + (f[1] / len) * ny;
+    if (dot > bestDot) { bestDot = dot; bx = x; by = y; }
+  }
+
+  p.x = bx;
+  p.y = by;
+
+  const s = nearestSource(p.x, p.y);
+  p.rgb = s ? s.rgb : [150, 150, 150];
+  p.ch = s ? s.ch : 0;
+}
+
+function spawnParticle(p) {
+  // 一定比例从画布边缘流入，代表「来自无穷远的场线」
+  if (sources.length && random() < INFALL) {
+    spawnFromInfinity(p);
   } else {
-    const pl = PLATES[src.idx];
-    if (!pl) { p.x = 0; p.y = 0; p.rgb = src.rgb; p.ch = src.ch; }
-    else {
-      p.x = pl.x + random(-pl.len / 2, pl.len / 2);
-      p.y = pl.y + (random() < 0.5 ? -1 : 1) * 24;   // 必须在 PLATE_R 之外
-      p.rgb = src.rgb;
-      p.ch = src.ch;
+    const src = pickSource();
+
+    if (!src) {
+      p.x = random(-W / 2, W / 2);
+      p.y = random(-H / 2, H / 2);
+      p.rgb = [150, 150, 150];
+      p.ch = 0;
+    } else if (src.kind === 'charge') {
+      const c = CHARGES[src.idx];
+      if (!c) { p.x = 0; p.y = 0; p.rgb = src.rgb; p.ch = src.ch; }
+      else {
+        const a = random(TAU);
+        p.x = c.x + Math.cos(a) * 24;
+        p.y = c.y + Math.sin(a) * 24;
+        p.rgb = src.rgb;
+        p.ch = src.ch;
+      }
+    } else {
+      const pl = PLATES[src.idx];
+      if (!pl) { p.x = 0; p.y = 0; p.rgb = src.rgb; p.ch = src.ch; }
+      else {
+        p.x = pl.x + random(-pl.len / 2, pl.len / 2);
+        p.y = pl.y + (random() < 0.5 ? -1 : 1) * 24;   // 必须在 PLATE_R 之外
+        p.rgb = src.rgb;
+        p.ch = src.ch;
+      }
     }
   }
 
@@ -1094,8 +1150,8 @@ function setView(v) {
   }
   $('taillabel').textContent = VIEW === 'field' ? '拖尾长度' : '轨迹长度';
   $('viewNote').textContent = VIEW === 'field'
-    ? '场线：无质量示踪点沿 E 方向滑动，呈现场的流线。'
-    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动；碰到极板或负电荷会被吸收，线段亮度表示当时的速度。';
+    ? '场线：无质量示踪点沿 E 方向滑动；约四分之一自画布边缘（无穷远）流入。'
+    : '粒子轨迹：沿法线射出，按 F=qE 运动；部分自边缘流入，碰到极板或负电荷会被吸收。';
 
   // 粒子数范围与专属控件都随模式变
   applyCountRange();
