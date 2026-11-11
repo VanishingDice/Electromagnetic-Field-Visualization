@@ -218,9 +218,13 @@
     <input id="trl" type="range" min="0" max="100" step="1" value="70">
     <input id="trln" type="number" min="0" max="100" step="1" value="70">
   </label>
-  <label class="ctl"><span>流速</span>
+  <label class="ctl" id="spdrow"><span>流速</span>
     <input id="spd" type="range" min="0.8" max="7" step="0.1" value="3.4">
     <input id="spdn" type="number" min="0.8" max="7" step="0.1" value="3.4">
+  </label>
+  <label class="ctl" id="v0row" style="display:none"><span>出射速度</span>
+    <input id="v0" type="range" min="0.2" max="5" step="0.1" value="2">
+    <input id="v0n" type="number" min="0.2" max="5" step="0.1" value="2">
   </label>
 
   <h2>电荷</h2>
@@ -237,7 +241,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.10</div>
+<div id="ver">v0.0.11</div>
 
 <script>
 /* =====================================================================
@@ -355,10 +359,30 @@ const ACCEL = 0.18;             // 加速度系数（越大越容易被场拽弯
 const MAX_V = 7;                // 速度上限（px/帧），防止靠近平板时数值爆炸
 const SINK_R = 26;              // 负极（负电荷 / 带负电的板）的吞噬半径
 
+let V0 = 2;                     // 轨迹模式：出射速度（px/帧）
+const EJECT_SPREAD = 0.28;      // 出射方向相对法线的角度抖动（rad，约 ±16°）
+
+/* 粒子数范围按模式切换：轨迹模式路径长，上限压到 400 */
+const COUNT_RANGE = {
+  field:      {min: 200, max: 2600, step: 100},
+  trajectory: {min: 0,   max: 400,  step: 10},
+};
+
 /* 各模式的默认粒子数：轨迹模式要看清路径，粒子数要少；小屏再减半 */
 function defaultCount() {
-  const base = VIEW === 'trajectory' ? 450 : 1400;
+  const base = VIEW === 'trajectory' ? 320 : 1400;
   return MODE === 'tall' ? Math.round(base * 0.5) : base;
+}
+
+/* 按当前模式调整粒子数控件的范围与步长 */
+function applyCountRange() {
+  const r = COUNT_RANGE[VIEW];
+  for (const el of [$('np'), $('npn')]) {
+    if (!el) continue;
+    el.min = r.min;
+    el.max = r.max;
+    el.step = r.step;
+  }
 }
 
 /* 拖拽 / 悬停：{kind: 'charge'|'plate'|null, idx, dx, dy}
@@ -508,14 +532,14 @@ function spawnParticle(p) {
   p.vx      = 0;
   p.vy      = 0;
 
-  // 轨迹模式：给一个「切向」初速度，让粒子走弧线而不是贴着场线
+  // 轨迹模式：沿法线（局部场方向）射出，只带一点角度抖动
   if (VIEW === 'trajectory') {
     const f = fieldAt(p.x, p.y);
     const m = Math.hypot(f[0], f[1]) || 1;
     const ux = f[0] / m, uy = f[1] / m;
-    const ang = (random() < 0.5 ? 1 : -1) * (Math.PI / 2) + random(-0.55, 0.55);
+    const ang = random(-EJECT_SPREAD, EJECT_SPREAD);
     const ca = Math.cos(ang), sa = Math.sin(ang);
-    const v0 = SPEED * UNIT * random(0.45, 1.0);
+    const v0 = V0 * UNIT * random(0.85, 1.15);
     p.vx = (ux * ca - uy * sa) * v0;
     p.vy = (ux * sa + uy * ca) * v0;
     p.maxLife = random(120, 320);
@@ -1064,7 +1088,12 @@ function setView(v) {
   $('taillabel').textContent = VIEW === 'field' ? '拖尾长度' : '轨迹长度';
   $('viewNote').textContent = VIEW === 'field'
     ? '场线：无质量示踪点沿 E 方向滑动，呈现场的流线。'
-    : '粒子轨迹：有质量的带电粒子按 F=qE 运动，碰到负极会被吸收。';
+    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动，碰到负极会被吸收。';
+
+  // 粒子数范围与专属控件都随模式变
+  applyCountRange();
+  $('spdrow').style.display = VIEW === 'field' ? 'grid' : 'none';
+  $('v0row').style.display  = VIEW === 'field' ? 'none' : 'grid';
 
   // 轨迹模式默认粒子少——路径长，多了会糊成一片
   // 必须整批重生：旧粒子的 vx/vy 为 0，直接沿用会贴着场线走
@@ -1078,10 +1107,12 @@ function setView(v) {
 }
 
 function buildPanel() {
+  applyCountRange();
   setPair('np', 'npn', N_PARTICLES);
   bindPair($('np'), $('npn'), v => setParticleCount(Math.round(v)));
   bindPair($('trl'), $('trln'), v => applyTail(v));
   bindPair($('spd'), $('spdn'), v => { SPEED = v; });
+  bindPair($('v0'), $('v0n'), v => { V0 = v; });
 
   // 显示方式切换
   $('viewSeg').addEventListener('click', ev => {
@@ -1250,6 +1281,8 @@ function resetAll() {
   const np0 = defaultCount();
   setPair('np', 'npn', np0);
   setPair('spd', 'spdn', 3.4);
+  setPair('v0', 'v0n', 2);
+  V0 = 2;
   setPair('trl', 'trln', 70);
   applyTail(70);
 
