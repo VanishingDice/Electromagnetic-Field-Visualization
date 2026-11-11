@@ -237,7 +237,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.9</div>
+<div id="ver">v0.0.10</div>
 
 <script>
 /* =====================================================================
@@ -353,6 +353,13 @@ let VIEW = 'field';
 /* 轨迹模式的物理参数：调这两个就能改弯曲程度 */
 const ACCEL = 0.18;             // 加速度系数（越大越容易被场拽弯）
 const MAX_V = 7;                // 速度上限（px/帧），防止靠近平板时数值爆炸
+const SINK_R = 26;              // 负极（负电荷 / 带负电的板）的吞噬半径
+
+/* 各模式的默认粒子数：轨迹模式要看清路径，粒子数要少；小屏再减半 */
+function defaultCount() {
+  const base = VIEW === 'trajectory' ? 450 : 1400;
+  return MODE === 'tall' ? Math.round(base * 0.5) : base;
+}
 
 /* 拖拽 / 悬停：{kind: 'charge'|'plate'|null, idx, dx, dy}
    dx/dy 是按下时「鼠标位置」到「物体中心」的偏移，保证抓住哪里就从哪里拖，
@@ -605,12 +612,26 @@ function stepTrajectory(p) {
   p.hist.push(p.x, p.y);
   if (p.hist.length > PATH_N * 2) p.hist.splice(0, 2);
 
-  // 轨迹模式不因撞到电荷而消失——穿过、偏折才是想看的
   let dead = p.life > p.maxLife;
   if (Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60) dead = true;
+  // 被负极（负电荷 / 带负电的板）吸收 —— 场线在那里终止，粒子也一样
+  if (nearSink(p.x, p.y)) dead = true;
   if (dead) spawnParticle(p);
 
   return {skip: false};
+}
+
+/* 是否落在「负极」的吞噬范围里 */
+function nearSink(wx, wy) {
+  for (let i = 0; i < CHARGES.length; i++) {
+    const c = CHARGES[i];
+    if (c.q < 0 && Math.hypot(wx - c.x, wy - c.y) < SINK_R) return true;
+  }
+  for (let i = 0; i < PLATES.length; i++) {
+    const pl = PLATES[i];
+    if (pl.lambda < 0 && distToPlate(wx, wy, pl) < SINK_R) return true;
+  }
+  return false;
 }
 
 rebuildSources();   // 纯 JS，不碰 p5，可以在顶层跑
@@ -683,7 +704,7 @@ function setup() {
   H = h;
 
   MODE = window.matchMedia(MOBILE_QUERY).matches ? 'tall' : 'wide';
-  if (MODE === 'tall') N_PARTICLES = 700;   // 小屏降低顶点数，避免掉帧
+  N_PARTICLES = defaultCount();              // 轨迹模式粒子少，小屏再减半
   loadScene(MODE);        // 内部会 syncLayout()
   rebuildSources();
 
@@ -1043,9 +1064,15 @@ function setView(v) {
   $('taillabel').textContent = VIEW === 'field' ? '拖尾长度' : '轨迹长度';
   $('viewNote').textContent = VIEW === 'field'
     ? '场线：无质量示踪点沿 E 方向滑动，呈现场的流线。'
-    : '粒子轨迹：有质量的带电粒子按 F=qE 运动，惯性会让它冲出弧线、被偏折。';
+    : '粒子轨迹：有质量的带电粒子按 F=qE 运动，碰到负极会被吸收。';
 
-  initParticles();                        // 两套物理，重开一批
+  // 轨迹模式默认粒子少——路径长，多了会糊成一片
+  // 必须整批重生：旧粒子的 vx/vy 为 0，直接沿用会贴着场线走
+  const n = defaultCount();
+  setPair('np', 'npn', n);
+  N_PARTICLES = n;
+  initParticles();
+
   background(BG[0], BG[1], BG[2]);
   if (VIEW === 'field' && trail) trail.background(BG[0], BG[1], BG[2]);
 }
@@ -1220,7 +1247,7 @@ function resetAll() {
   drag = NO_DRAG();
   hover = NO_DRAG();
 
-  const np0 = MODE === 'tall' ? 700 : 1400;
+  const np0 = defaultCount();
   setPair('np', 'npn', np0);
   setPair('spd', 'spdn', 3.4);
   setPair('trl', 'trln', 70);
