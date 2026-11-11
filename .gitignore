@@ -16,3 +16,4 @@ desktop.ini
 # 依赖
 node_modules/
 _msg.txt
+tools/pot.bin
