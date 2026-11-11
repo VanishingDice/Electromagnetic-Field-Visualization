@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.19</div>
+<div id="ver">v0.0.20</div>
 
 <script>
 /* =====================================================================
@@ -365,9 +365,10 @@ const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 
 /* 电势底色。声明必须放在 rebuildSources 之前——它在顶层就会被调用 */
-const POT_W = 240, POT_H = 135; // 低分辨率网格，放大插值变平滑
-const POT_MAX = 60;             // 最大加亮量（0~255），越小底色越含蓄
-const POT_V0 = 1.2;             // 半饱和值：V 等于它时映射到 0.5
+const POT_W = 320, POT_H = 180; // 低分辨率网格，放大插值变平滑
+const POT_MAX = 80;             // 最大加亮量（0~255）
+const POT_V0 = 0.6;             // 对数尺度：小 → 低电势区层次多；大 → 只剩近处亮
+const POT_REF = 6;              // 归一化参考电势，超过它就顶格
 
 let potImg = null;
 let potDirty = true;
@@ -884,7 +885,8 @@ function potentialAt(px, py) {
     if (!c.q) continue;
     const dx = x - c.x / R0;
     const dy = y - c.y / R0;
-    v += c.q / Math.max(Math.hypot(dx, dy), 0.12);
+    // 软截断：用 √(r²+ε²) 代替 max(r, ε)，避免在 ε 处留下折角
+    v += c.q / Math.sqrt(dx * dx + dy * dy + 0.0144);
   }
 
   for (let i = 0; i < PLATES.length; i++) {
@@ -892,7 +894,8 @@ function potentialAt(px, py) {
     if (!pl.lambda) continue;
     const L = pl.len / R0 / 2;
     const xr = x - pl.x / R0;
-    const yy = Math.max(Math.abs(y - pl.y / R0), 0.06);
+    const dy = y - pl.y / R0;
+    const yy = Math.sqrt(dy * dy + 0.0004);   // 同样软截断，消除板边的分界线
     // ∫ dx'/√((x-x')²+y²) = asinh
     v += pl.lambda * (Math.asinh((xr + L) / yy) - Math.asinh((xr - L) / yy));
   }
@@ -900,11 +903,11 @@ function potentialAt(px, py) {
   return v;
 }
 
-/* 电势 → 亮度：先做饱和映射，再平方压暗远处，避免整屏发灰 */
+/* 电势 → 亮度：取对数把 1/r 的长尾压平，远处也能分出层次 */
 function potBrightness(v) {
   if (!(v > 0)) return 0;
-  const t = v / (v + POT_V0);
-  return t * t * POT_MAX;
+  const t = Math.log1p(v / POT_V0) / Math.log1p(POT_REF / POT_V0);
+  return Math.min(1, t) * POT_MAX;
 }
 
 function updatePotential() {
