@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.13</div>
+<div id="ver">v0.0.14</div>
 
 <script>
 /* =====================================================================
@@ -358,7 +358,8 @@ let VIEW = 'field';
 /* 轨迹模式的物理参数：调这两个就能改弯曲程度 */
 const ACCEL = 0.03;             // 加速度系数：太大初速度会被抹平，太小轨迹就变直线
 const MAX_V = 14;               // 速度上限（px/帧），必须高于出射速度上限
-const SINK_R = 26;              // 负极（负电荷 / 带负电的板）的吞噬半径
+const SINK_R = 26;              // 负电荷的吸收半径
+const PLATE_SINK_R = 16;        // 极板的吸收半径（板半高 9，再留 7px）
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 
 let V0 = 2.5;                   // 轨迹模式：出射速度（px/帧）
@@ -518,7 +519,7 @@ function spawnParticle(p) {
     if (!pl) { p.x = 0; p.y = 0; p.rgb = src.rgb; p.ch = src.ch; }
     else {
       p.x = pl.x + random(-pl.len / 2, pl.len / 2);
-      p.y = pl.y + (random() < 0.5 ? -1 : 1) * 14;
+      p.y = pl.y + (random() < 0.5 ? -1 : 1) * 24;   // 必须在 PLATE_SINK_R 之外
       p.rgb = src.rgb;
       p.ch = src.ch;
     }
@@ -646,15 +647,17 @@ function stepTrajectory(p) {
   return {skip: false};
 }
 
-/* 是否落在「负极」的吞噬范围里 */
+/* 粒子是否被「吸收」了。
+   极板是实体电极：不管带正电还是负电，撞上去都会被吸收——
+   否则粒子会从看起来实心的板子里穿过去。
+   点电荷只在带负电时才吸收（正电荷附近要看偏折，不吸收）。 */
 function nearSink(wx, wy) {
   for (let i = 0; i < CHARGES.length; i++) {
     const c = CHARGES[i];
     if (c.q < 0 && Math.hypot(wx - c.x, wy - c.y) < SINK_R) return true;
   }
   for (let i = 0; i < PLATES.length; i++) {
-    const pl = PLATES[i];
-    if (pl.lambda < 0 && distToPlate(wx, wy, pl) < SINK_R) return true;
+    if (distToPlate(wx, wy, PLATES[i]) < PLATE_SINK_R) return true;
   }
   return false;
 }
@@ -1095,7 +1098,7 @@ function setView(v) {
   $('taillabel').textContent = VIEW === 'field' ? '拖尾长度' : '轨迹长度';
   $('viewNote').textContent = VIEW === 'field'
     ? '场线：无质量示踪点沿 E 方向滑动，呈现场的流线。'
-    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动，碰到负极会被吸收。';
+    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动；碰到极板或负电荷会被吸收。';
 
   // 粒子数范围与专属控件都随模式变
   applyCountRange();
