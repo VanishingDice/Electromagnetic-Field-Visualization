@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.15</div>
+<div id="ver">v0.0.16</div>
 
 <script>
 /* =====================================================================
@@ -359,8 +359,7 @@ let VIEW = 'field';
 const ACCEL = 0.03;             // 加速度系数：太大初速度会被抹平，太小轨迹就变直线
 const MAX_V = 14;               // 速度上限（px/帧），必须高于出射速度上限
 const SINK_R = 26;              // 负电荷的吸收半径
-const PLATE_R = 16;             // 极板的碰撞半径（板半高 9，再留 7px）
-const BOUNCE = 0.96;            // 极板反弹的能量保留
+const PLATE_R = 12;             // 极板的吸收半径（板半高 9，只多留 3px）
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 
 let V0 = 2.5;                   // 轨迹模式：出射速度（px/帧）
@@ -636,13 +635,11 @@ function stepTrajectory(p) {
   p.y += p.vy;
   p.life++;
 
-  bouncePlates(p);      // 撞到极板就弹开，不吸收
+  // 记录轨迹，连当时的速度一起存下来 —— 绘制时要逐段上色
+  p.hist.push(p.x, p.y, Math.hypot(p.vx, p.vy));
+  if (p.hist.length > PATH_N * 3) p.hist.splice(0, 3);
 
-  // 记录轨迹，供绘制折线
-  p.hist.push(p.x, p.y);
-  if (p.hist.length > PATH_N * 2) p.hist.splice(0, 2);
-
-  // 取消寿命限制：只在飞出画布或被负电荷吸收时重生
+  // 取消寿命限制：只在飞出画布或被极板 / 负电荷吸收时重生
   let dead = Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60;
   if (nearSink(p.x, p.y)) dead = true;
   if (dead) spawnParticle(p);
@@ -650,31 +647,16 @@ function stepTrajectory(p) {
   return {skip: false};
 }
 
-/* 极板当弹性墙：进入吸收带就把法向速度反向，并推回带外。
-   不这样做的话，粒子要么被吃掉（看不到反弹），要么直接穿透。
-   返回是否发生了反弹。 */
-function bouncePlates(p) {
-  for (let i = 0; i < PLATES.length; i++) {
-    const pl = PLATES[i];
-    if (distToPlate(p.x, p.y, pl) >= PLATE_R) continue;
-
-    const side = p.y < pl.y ? -1 : 1;            // 在板上方 / 下方
-    p.y = pl.y + side * (PLATE_R + 2);           // 推回带外
-    // 法向速度反向，并保证有一点离板速度，避免贴着板抖动
-    p.vy = side * Math.max(Math.abs(p.vy) * BOUNCE, 0.9);
-    p.vx *= 0.98;                                // 一点点摩擦
-    return true;
-  }
-  return false;
-}
-
 /* 粒子是否被「吸收」了。
-   只有负电荷会吸收——正电荷附近要看偏折，不吸收。
-   极板不再吸收，改为在 bouncePlates() 里弹开。 */
+   极板不论 λ 正负都会吸收（它是实体电极）；
+   点电荷只在带负电时吸收，正电荷附近要看偏折。 */
 function nearSink(wx, wy) {
   for (let i = 0; i < CHARGES.length; i++) {
     const c = CHARGES[i];
     if (c.q < 0 && Math.hypot(wx - c.x, wy - c.y) < SINK_R) return true;
+  }
+  for (let i = 0; i < PLATES.length; i++) {
+    if (distToPlate(wx, wy, PLATES[i]) < PLATE_R) return true;
   }
   return false;
 }
@@ -844,39 +826,37 @@ function drawField() {
 function drawTrajectories() {
   background(BG[0], BG[1], BG[2]);
 
-  // 顶点预算：路径太长就按步长抽稀，保证不超过约 6 万个顶点/帧
-  const budget = 60000;
+  // 逐段上色意味着每段都要一次 stroke，预算按「段数」算
+  const budget = 30000;
   const stride = Math.max(1, Math.ceil((particles.length * PATH_N) / budget));
 
   push();
   translate(W / 2, H / 2);
   strokeCap(ROUND);
-  noFill();
 
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
     advect(p);
 
-    const h = p.hist;
-    if (h.length < 6) continue;          // 刚重生的还没走出形状
+    const h = p.hist;                    // 每 3 个数：x, y, 当时的速度
+    if (h.length < 9) continue;          // 刚重生的还没走出形状
 
-    // 速度 → 亮度 + 一点点粗细：快的地方亮且略粗
-    const sp = Math.hypot(p.vx, p.vy);
-    const t = clamp((sp - V_MIN) / (V_MAX - V_MIN), 0, 1);
-
-    stroke(p.rgb[0], p.rgb[1], p.rgb[2], 70 + t * 160);
-    strokeWeight(1.0 + t * 0.8);
-
-    beginShape();
-    for (let k = 0; k < h.length - 2; k += 2 * stride) vertex(h[k], h[k + 1]);
-    vertex(h[h.length - 2], h[h.length - 1]);
-    endShape();
+    // 逐段绘制：颜色/粗细取「画这一段时」的速度，老线段保留当时的样子
+    let px = h[0], py = h[1];
+    for (let k = 3 * stride; k < h.length; k += 3 * stride) {
+      const t = clamp((h[k + 2] - V_MIN) / (V_MAX - V_MIN), 0, 1);
+      stroke(p.rgb[0], p.rgb[1], p.rgb[2], 70 + t * 160);
+      strokeWeight(1.0 + t * 0.8);
+      line(px, py, h[k], h[k + 1]);
+      px = h[k];
+      py = h[k + 1];
+    }
 
     // 头部亮点，让方向一眼可见
+    const tNow = clamp((Math.hypot(p.vx, p.vy) - V_MIN) / (V_MAX - V_MIN), 0, 1);
     noStroke();
     fill(p.rgb[0], p.rgb[1], p.rgb[2], 235);
-    circle(p.x, p.y, 2.8 + t * 2);
-    noFill();
+    circle(p.x, p.y, 2.8 + tNow * 2);
   }
 
   pop();
@@ -1115,7 +1095,7 @@ function setView(v) {
   $('taillabel').textContent = VIEW === 'field' ? '拖尾长度' : '轨迹长度';
   $('viewNote').textContent = VIEW === 'field'
     ? '场线：无质量示踪点沿 E 方向滑动，呈现场的流线。'
-    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动；撞到极板会被弹开，撞到负电荷会被吸收。';
+    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动；碰到极板或负电荷会被吸收，线段亮度表示当时的速度。';
 
   // 粒子数范围与专属控件都随模式变
   applyCountRange();
