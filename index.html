@@ -128,6 +128,20 @@
   .btn.ghost { background: none; }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
 
+  /* 分段选择器 */
+  .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .seg button {
+    padding: 7px 4px;
+    border: 1px solid #2a2a2e; border-radius: 6px;
+    background: #141416; color: #7d766f;
+    font: inherit; font-size: 11.5px; cursor: pointer;
+    transition: background .12s, color .12s, border-color .12s;
+  }
+  .seg button:hover { border-color: #3a3a40; color: #a9a29a; }
+  .seg button.on {
+    background: #26262c; border-color: #4c4c55; color: #ded8d0; font-weight: 600;
+  }
+
   .note { font-size: 10.5px; color: #5c5650; line-height: 1.6; margin: 10px 0 0; }
 
   #err {
@@ -188,12 +202,19 @@
   <h1>电磁场可视化</h1>
   <p class="sub">拖动电荷或平板 · 右侧实时调整</p>
 
+  <h2>显示方式</h2>
+  <div class="seg" id="viewSeg">
+    <button data-view="field" class="on">场线</button>
+    <button data-view="trajectory">粒子轨迹</button>
+  </div>
+  <p class="note" id="viewNote">场线：无质量示踪点沿 E 方向滑动，呈现场的流线。</p>
+
   <h2>流场</h2>
   <label class="ctl"><span>粒子数</span>
     <input id="np" type="range" min="200" max="2600" step="100" value="1400">
     <input id="npn" type="number" min="200" max="2600" step="100" value="1400">
   </label>
-  <label class="ctl"><span>拖尾长度</span>
+  <label class="ctl"><span id="taillabel">拖尾长度</span>
     <input id="trl" type="range" min="0" max="100" step="1" value="70">
     <input id="trln" type="number" min="0" max="100" step="1" value="70">
   </label>
@@ -216,7 +237,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.8</div>
+<div id="ver">v0.0.9</div>
 
 <script>
 /* =====================================================================
@@ -319,9 +340,19 @@ function captureLayout() {
 
 let N_PARTICLES = 1400;
 let SPEED = 3.4;
-let TRAIL_ALPHA = 8.1;          // 每帧从累积层里衰减掉多少（0~255）
+let TAIL_SET = 70;              // 滑杆原值（0~100），两种模式各取所需
+let TRAIL_ALPHA = 8.1;          // 场线模式：每帧从累积层里衰减掉多少（0~255）
+let PATH_N = 111;               // 轨迹模式：每颗粒子保留多少帧路径
 const MAX_CHARGES = 8;
 const MAX_PLATES  = 6;
+
+/* 显示方式：'field' = 无质量示踪点追随 E（流线）
+             'trajectory' = 有质量的带电粒子，按 F=qE 做真实运动（轨迹） */
+let VIEW = 'field';
+
+/* 轨迹模式的物理参数：调这两个就能改弯曲程度 */
+const ACCEL = 0.18;             // 加速度系数（越大越容易被场拽弯）
+const MAX_V = 7;                // 速度上限（px/帧），防止靠近平板时数值爆炸
 
 /* 拖拽 / 悬停：{kind: 'charge'|'plate'|null, idx, dx, dy}
    dx/dy 是按下时「鼠标位置」到「物体中心」的偏移，保证抓住哪里就从哪里拖，
@@ -466,11 +497,28 @@ function spawnParticle(p) {
   p.maxLife = random(160, 460);
   p.alpha   = random(120, 210);
   p.skip    = true;
+  p.hist    = [];
+  p.vx      = 0;
+  p.vy      = 0;
+
+  // 轨迹模式：给一个「切向」初速度，让粒子走弧线而不是贴着场线
+  if (VIEW === 'trajectory') {
+    const f = fieldAt(p.x, p.y);
+    const m = Math.hypot(f[0], f[1]) || 1;
+    const ux = f[0] / m, uy = f[1] / m;
+    const ang = (random() < 0.5 ? 1 : -1) * (Math.PI / 2) + random(-0.55, 0.55);
+    const ca = Math.cos(ang), sa = Math.sin(ang);
+    const v0 = SPEED * UNIT * random(0.45, 1.0);
+    p.vx = (ux * ca - uy * sa) * v0;
+    p.vy = (ux * sa + uy * ca) * v0;
+    p.maxLife = random(120, 320);
+  }
 }
 
 function blankParticle() {
   return {x: 0, y: 0, rgb: [160, 160, 160], ch: 0, mul: 1, jit: 0,
-          life: 0, maxLife: 300, alpha: 150, skip: true};
+          life: 0, maxLife: 300, alpha: 150, skip: true,
+          hist: [], vx: 0, vy: 0};
 }
 
 function setParticleCount(n) {
@@ -491,6 +539,8 @@ function initParticles() {
 
 /* 推进一步，返回这一小段（绘制与离线预览共用） */
 function advect(p) {
+  if (VIEW === 'trajectory') return stepTrajectory(p);
+
   const f = fieldAt(p.x, p.y);
 
   const ca = Math.cos(p.jit), sa = Math.sin(p.jit);
@@ -524,6 +574,43 @@ function advect(p) {
   if (dead) spawnParticle(p);
 
   return seg;
+}
+
+/* 轨迹模式：有质量的带电粒子，a = qE/m，速度自己累积。
+   和场线最大的差别就是「惯性」——粒子不会贴着场线转弯，会冲过头。 */
+function stepTrajectory(p) {
+  const f = fieldAt(p.x, p.y);
+  const m = Math.hypot(f[0], f[1]);
+  if (!(m > 1e-9)) {                    // 没有场：重新投放
+    spawnParticle(p);
+    return {skip: true};
+  }
+
+  // 限幅后再转成加速度，避免靠近平板时被 1/y 奇异性弹飞
+  const acc = (ACCEL * Math.min(m, 4)) / m;
+  p.vx += f[0] * acc;
+  p.vy += f[1] * acc;
+
+  const sp = Math.hypot(p.vx, p.vy);
+  if (sp > MAX_V) {
+    p.vx *= MAX_V / sp;
+    p.vy *= MAX_V / sp;
+  }
+
+  p.x += p.vx;
+  p.y += p.vy;
+  p.life++;
+
+  // 记录轨迹，供绘制折线
+  p.hist.push(p.x, p.y);
+  if (p.hist.length > PATH_N * 2) p.hist.splice(0, 2);
+
+  // 轨迹模式不因撞到电荷而消失——穿过、偏折才是想看的
+  let dead = p.life > p.maxLife;
+  if (Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60) dead = true;
+  if (dead) spawnParticle(p);
+
+  return {skip: false};
 }
 
 rebuildSources();   // 纯 JS，不碰 p5，可以在顶层跑
@@ -652,7 +739,21 @@ function draw() {
   if (drag.kind === 'charge' && drag.idx >= CHARGES.length) drag = NO_DRAG();
   if (drag.kind === 'plate' && drag.idx >= PLATES.length) drag = NO_DRAG();
 
-  // ① 累积层：浏览器负责 alpha 衰减（清晰、全分辨率），再分带清掉量化残留
+  if (VIEW === 'trajectory') drawTrajectories();
+  else drawField();
+
+  push();
+  translate(W / 2, H / 2);
+  drawPlates();
+  drawCharges();
+  drawLabels();
+  pop();
+
+  updateCursor();
+}
+
+/* 场线：累积层每帧衰减 + 画增量线段 */
+function drawField() {
   trail.background(BG[0], BG[1], BG[2], TRAIL_ALPHA);
   killResidue();
 
@@ -669,18 +770,44 @@ function draw() {
   }
   trail.pop();
 
-  // ② 主画布：整块清黑，再原尺寸贴上累积层
   background(BG[0], BG[1], BG[2]);
   image(trail, 0, 0);
+}
+
+/* 真实轨迹：每帧重画，按粒子自己的路径点连折线（气泡室照片那种） */
+function drawTrajectories() {
+  background(BG[0], BG[1], BG[2]);
+
+  // 顶点预算：路径太长就按步长抽稀，保证不超过约 6 万个顶点/帧
+  const budget = 60000;
+  const stride = Math.max(1, Math.ceil((particles.length * PATH_N) / budget));
 
   push();
   translate(W / 2, H / 2);
-  drawPlates();
-  drawCharges();
-  drawLabels();
-  pop();
+  strokeCap(ROUND);
+  strokeWeight(1.2);
 
-  updateCursor();
+  for (let i = 0; i < particles.length; i++) {
+    const p = particles[i];
+    advect(p);
+
+    const h = p.hist;
+    if (h.length < 6) continue;          // 刚重生的还没走出形状
+
+    stroke(p.rgb[0], p.rgb[1], p.rgb[2], p.alpha);
+    noFill();
+    beginShape();
+    for (let k = 0; k < h.length - 2; k += 2 * stride) vertex(h[k], h[k + 1]);
+    vertex(h[h.length - 2], h[h.length - 1]);
+    endShape();
+
+    // 头部亮点，让方向一眼可见
+    noStroke();
+    fill(p.rgb[0], p.rgb[1], p.rgb[2], 235);
+    circle(p.x, p.y, 3.2);
+  }
+
+  pop();
 }
 
 function drawPlates() {
@@ -896,11 +1023,45 @@ function setPair(rangeId, numId, v) {
   if (n) n.value = v;
 }
 
+/* 同一个滑杆在两种模式下含义不同：
+   场线 → 累积层的衰减速度（越大尾巴越长）
+   轨迹 → 每颗粒子保留多少帧路径 */
+function applyTail(v) {
+  TAIL_SET = v;
+  TRAIL_ALPHA = 20 - v * 0.17;
+  PATH_N = Math.round(20 + v * 1.3);      // 20 ~ 150 帧
+}
+
+/* 切换显示方式 */
+function setView(v) {
+  if (v === VIEW) return;
+  VIEW = v;
+
+  for (const b of $('viewSeg').querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.view === VIEW);
+  }
+  $('taillabel').textContent = VIEW === 'field' ? '拖尾长度' : '轨迹长度';
+  $('viewNote').textContent = VIEW === 'field'
+    ? '场线：无质量示踪点沿 E 方向滑动，呈现场的流线。'
+    : '粒子轨迹：有质量的带电粒子按 F=qE 运动，惯性会让它冲出弧线、被偏折。';
+
+  initParticles();                        // 两套物理，重开一批
+  background(BG[0], BG[1], BG[2]);
+  if (VIEW === 'field' && trail) trail.background(BG[0], BG[1], BG[2]);
+}
+
 function buildPanel() {
   setPair('np', 'npn', N_PARTICLES);
   bindPair($('np'), $('npn'), v => setParticleCount(Math.round(v)));
-  bindPair($('trl'), $('trln'), v => { TRAIL_ALPHA = 20 - v * 0.17; });
+  bindPair($('trl'), $('trln'), v => applyTail(v));
   bindPair($('spd'), $('spdn'), v => { SPEED = v; });
+
+  // 显示方式切换
+  $('viewSeg').addEventListener('click', ev => {
+    const b = ev.target.closest('button');
+    if (!b || !b.dataset.view) return;
+    setView(b.dataset.view);
+  });
 
   $('add').addEventListener('click', addCharge);
   $('addPlate').addEventListener('click', addPlate);
@@ -1063,7 +1224,7 @@ function resetAll() {
   setPair('np', 'npn', np0);
   setPair('spd', 'spdn', 3.4);
   setPair('trl', 'trln', 70);
-  TRAIL_ALPHA = 20 - 70 * 0.17;
+  applyTail(70);
 
   rebuildSources();
   setParticleCount(np0);
@@ -1072,6 +1233,7 @@ function resetAll() {
 
 function keyPressed() {
   if (key === 'r' || key === 'R') resetAll();
+  if (key === 't' || key === 'T') setView(VIEW === 'field' ? 'trajectory' : 'field');
 }
 </script>
 </body>
