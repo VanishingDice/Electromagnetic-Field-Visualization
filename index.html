@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.14</div>
+<div id="ver">v0.0.15</div>
 
 <script>
 /* =====================================================================
@@ -359,7 +359,8 @@ let VIEW = 'field';
 const ACCEL = 0.03;             // 加速度系数：太大初速度会被抹平，太小轨迹就变直线
 const MAX_V = 14;               // 速度上限（px/帧），必须高于出射速度上限
 const SINK_R = 26;              // 负电荷的吸收半径
-const PLATE_SINK_R = 16;        // 极板的吸收半径（板半高 9，再留 7px）
+const PLATE_R = 16;             // 极板的碰撞半径（板半高 9，再留 7px）
+const BOUNCE = 0.96;            // 极板反弹的能量保留
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 
 let V0 = 2.5;                   // 轨迹模式：出射速度（px/帧）
@@ -519,7 +520,7 @@ function spawnParticle(p) {
     if (!pl) { p.x = 0; p.y = 0; p.rgb = src.rgb; p.ch = src.ch; }
     else {
       p.x = pl.x + random(-pl.len / 2, pl.len / 2);
-      p.y = pl.y + (random() < 0.5 ? -1 : 1) * 24;   // 必须在 PLATE_SINK_R 之外
+      p.y = pl.y + (random() < 0.5 ? -1 : 1) * 24;   // 必须在 PLATE_R 之外
       p.rgb = src.rgb;
       p.ch = src.ch;
     }
@@ -635,11 +636,13 @@ function stepTrajectory(p) {
   p.y += p.vy;
   p.life++;
 
+  bouncePlates(p);      // 撞到极板就弹开，不吸收
+
   // 记录轨迹，供绘制折线
   p.hist.push(p.x, p.y);
   if (p.hist.length > PATH_N * 2) p.hist.splice(0, 2);
 
-  // 取消寿命限制：只在飞出画布或被负极吸收时重生
+  // 取消寿命限制：只在飞出画布或被负电荷吸收时重生
   let dead = Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60;
   if (nearSink(p.x, p.y)) dead = true;
   if (dead) spawnParticle(p);
@@ -647,17 +650,31 @@ function stepTrajectory(p) {
   return {skip: false};
 }
 
+/* 极板当弹性墙：进入吸收带就把法向速度反向，并推回带外。
+   不这样做的话，粒子要么被吃掉（看不到反弹），要么直接穿透。
+   返回是否发生了反弹。 */
+function bouncePlates(p) {
+  for (let i = 0; i < PLATES.length; i++) {
+    const pl = PLATES[i];
+    if (distToPlate(p.x, p.y, pl) >= PLATE_R) continue;
+
+    const side = p.y < pl.y ? -1 : 1;            // 在板上方 / 下方
+    p.y = pl.y + side * (PLATE_R + 2);           // 推回带外
+    // 法向速度反向，并保证有一点离板速度，避免贴着板抖动
+    p.vy = side * Math.max(Math.abs(p.vy) * BOUNCE, 0.9);
+    p.vx *= 0.98;                                // 一点点摩擦
+    return true;
+  }
+  return false;
+}
+
 /* 粒子是否被「吸收」了。
-   极板是实体电极：不管带正电还是负电，撞上去都会被吸收——
-   否则粒子会从看起来实心的板子里穿过去。
-   点电荷只在带负电时才吸收（正电荷附近要看偏折，不吸收）。 */
+   只有负电荷会吸收——正电荷附近要看偏折，不吸收。
+   极板不再吸收，改为在 bouncePlates() 里弹开。 */
 function nearSink(wx, wy) {
   for (let i = 0; i < CHARGES.length; i++) {
     const c = CHARGES[i];
     if (c.q < 0 && Math.hypot(wx - c.x, wy - c.y) < SINK_R) return true;
-  }
-  for (let i = 0; i < PLATES.length; i++) {
-    if (distToPlate(wx, wy, PLATES[i]) < PLATE_SINK_R) return true;
   }
   return false;
 }
@@ -1098,7 +1115,7 @@ function setView(v) {
   $('taillabel').textContent = VIEW === 'field' ? '拖尾长度' : '轨迹长度';
   $('viewNote').textContent = VIEW === 'field'
     ? '场线：无质量示踪点沿 E 方向滑动，呈现场的流线。'
-    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动；碰到极板或负电荷会被吸收。';
+    : '粒子轨迹：有质量的带电粒子沿法线射出，按 F=qE 运动；撞到极板会被弹开，撞到负电荷会被吸收。';
 
   // 粒子数范围与专属控件都随模式变
   applyCountRange();
