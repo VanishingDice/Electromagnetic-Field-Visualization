@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.23</div>
+<div id="ver">v0.0.24</div>
 
 <script>
 /* =====================================================================
@@ -363,7 +363,7 @@ const SINK_R = 5;               // 负电荷的吸收半径（要贴得很近才
 const PLATE_R = 10;             // 极板的吸收半径（板半高 9，只多留 1px）
 const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比例
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
-const GHOST_LIFE = 50;          // 轨迹淡出多少帧
+const GHOST_LIFE = 50;          // 残影从尾端缩完大约用多少帧
 const MAX_GHOSTS = 36;          // 同时保留的残影上限
 
 /* 电势底色。声明必须放在 rebuildSources 之前——它在顶层就会被调用 */
@@ -715,9 +715,15 @@ function stepTrajectory(p) {
   let dead = Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60;
   if (nearSink(p.x, p.y)) dead = true;
   if (dead) {
-    // 把走过的路径留成「残影」，接下来几十帧慢慢淡出，而不是瞬间消失
+    // 把走过的路径留成「残影」：不是整体变暗，而是从尾端往回一点点缩短
     if (p.hist.length >= 9) {
-      ghosts.push({hist: p.hist.slice(), rgb: p.rgb, life: GHOST_LIFE});
+      const pts = p.hist.length / 3;
+      ghosts.push({
+        hist: p.hist.slice(),
+        rgb: p.rgb,
+        cut: 0,                                        // 已经吃掉多少个点
+        per: Math.max(1, Math.round(pts / GHOST_LIFE)), // 每帧吃掉几个点
+      });
       if (ghosts.length > MAX_GHOSTS) ghosts.shift();
     }
     spawnParticle(p);
@@ -1027,23 +1033,26 @@ function drawTrajectories() {
   // 已消失粒子的轨迹：整体按剩余寿命线性变暗，直到完全淡出
   for (let g = ghosts.length - 1; g >= 0; g--) {
     const gh = ghosts[g];
-    const fade = gh.life / GHOST_LIFE;
     const h = gh.hist;
+    const start = gh.cut * 3;            // 已经被吃掉的前段
 
-    if (h.length >= 9) {
-      let px = h[0], py = h[1];
-      for (let k = 3 * stride; k < h.length; k += 3 * stride) {
-        const t = clamp((h[k + 2] - V_MIN) / (V_MAX - V_MIN), 0, 1);
-        stroke(gh.rgb[0], gh.rgb[1], gh.rgb[2], (100 + t * 155) * fade);
-        strokeWeight(1.0 + t * 0.9);
-        line(px, py, h[k], h[k + 1]);
-        px = h[k];
-        py = h[k + 1];
-      }
+    if (start >= h.length - 3) {         // 缩没了
+      ghosts.splice(g, 1);
+      continue;
     }
 
-    gh.life--;
-    if (gh.life <= 0) ghosts.splice(g, 1);
+    // 从尾端开始画（尾端先消失），亮度不衰减，保持原来的样子往回缩
+    let px = h[start], py = h[start + 1];
+    for (let k = start + 3; k < h.length; k += 3) {
+      const t = clamp((h[k + 2] - V_MIN) / (V_MAX - V_MIN), 0, 1);
+      stroke(gh.rgb[0], gh.rgb[1], gh.rgb[2], 100 + t * 155);
+      strokeWeight(1.0 + t * 0.9);
+      line(px, py, h[k], h[k + 1]);
+      px = h[k];
+      py = h[k + 1];
+    }
+
+    gh.cut += gh.per;
   }
 
   pop();
