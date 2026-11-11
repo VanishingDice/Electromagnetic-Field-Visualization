@@ -110,7 +110,9 @@ for (let j = 0; j < POT_H; j++) {
   const wy = ((j + 0.5) / POT_H - 0.5) * H;
   for (let i = 0; i < POT_W; i++) {
     const wx = ((i + 0.5) / POT_W - 0.5) * W;
-    pot[j * POT_W + i] = Math.round(potBrightness(potentialAt(wx, wy)) + (Math.random() - 0.5));
+    // 确定性抖动：保证重复运行生成同一张预览图
+    const dith = (((i * 73856093) ^ (j * 19349663)) & 1023) / 1023 - 0.5;
+    pot[j * POT_W + i] = Math.round(potBrightness(potentialAt(wx, wy)) + dith);
   }
 }
 fs.writeFileSync(path.join(HERE, 'pot.bin'), pot);
