@@ -237,11 +237,12 @@
 
   <h2>全局</h2>
   <button id="reset" class="btn ghost">重置为默认</button>
+  <button id="clearP" class="btn ghost">清空所有粒子</button>
   <p class="note">电荷量为正时向外发射场线，为负时吸收；为 0 不参与计算。<br>平板 λ 为 0 时不再发射场线，但仍然可以拖动。</p>
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.12</div>
+<div id="ver">v0.0.13</div>
 
 <script>
 /* =====================================================================
@@ -358,6 +359,7 @@ let VIEW = 'field';
 const ACCEL = 0.03;             // 加速度系数：太大初速度会被抹平，太小轨迹就变直线
 const MAX_V = 14;               // 速度上限（px/帧），必须高于出射速度上限
 const SINK_R = 26;              // 负极（负电荷 / 带负电的板）的吞噬半径
+const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 
 let V0 = 2.5;                   // 轨迹模式：出射速度（px/帧）
 const EJECT_SPREAD = 0.28;      // 出射方向相对法线的角度抖动（rad，约 ±16°）
@@ -370,7 +372,7 @@ const COUNT_RANGE = {
 
 /* 各模式的默认粒子数：轨迹模式要看清路径，粒子数要少；小屏再减半 */
 function defaultCount() {
-  const base = VIEW === 'trajectory' ? 320 : 1400;
+  const base = VIEW === 'trajectory' ? 40 : 1400;
   return MODE === 'tall' ? Math.round(base * 0.5) : base;
 }
 
@@ -636,9 +638,8 @@ function stepTrajectory(p) {
   p.hist.push(p.x, p.y);
   if (p.hist.length > PATH_N * 2) p.hist.splice(0, 2);
 
-  let dead = p.life > p.maxLife;
-  if (Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60) dead = true;
-  // 被负极（负电荷 / 带负电的板）吸收 —— 场线在那里终止，粒子也一样
+  // 取消寿命限制：只在飞出画布或被负极吸收时重生
+  let dead = Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60;
   if (nearSink(p.x, p.y)) dead = true;
   if (dead) spawnParticle(p);
 
@@ -830,7 +831,7 @@ function drawTrajectories() {
   push();
   translate(W / 2, H / 2);
   strokeCap(ROUND);
-  strokeWeight(1.2);
+  noFill();
 
   for (let i = 0; i < particles.length; i++) {
     const p = particles[i];
@@ -839,8 +840,13 @@ function drawTrajectories() {
     const h = p.hist;
     if (h.length < 6) continue;          // 刚重生的还没走出形状
 
-    stroke(p.rgb[0], p.rgb[1], p.rgb[2], p.alpha);
-    noFill();
+    // 速度 → 亮度 + 一点点粗细：快的地方亮且略粗
+    const sp = Math.hypot(p.vx, p.vy);
+    const t = clamp((sp - V_MIN) / (V_MAX - V_MIN), 0, 1);
+
+    stroke(p.rgb[0], p.rgb[1], p.rgb[2], 70 + t * 160);
+    strokeWeight(1.0 + t * 0.8);
+
     beginShape();
     for (let k = 0; k < h.length - 2; k += 2 * stride) vertex(h[k], h[k + 1]);
     vertex(h[h.length - 2], h[h.length - 1]);
@@ -849,7 +855,8 @@ function drawTrajectories() {
     // 头部亮点，让方向一眼可见
     noStroke();
     fill(p.rgb[0], p.rgb[1], p.rgb[2], 235);
-    circle(p.x, p.y, 3.2);
+    circle(p.x, p.y, 2.8 + t * 2);
+    noFill();
   }
 
   pop();
@@ -1124,6 +1131,7 @@ function buildPanel() {
   $('add').addEventListener('click', addCharge);
   $('addPlate').addEventListener('click', addPlate);
   $('reset').addEventListener('click', resetAll);
+  $('clearP').addEventListener('click', clearParticles);
 
   // 电荷和平板共用一套委托处理器：靠 data-list 区分
   $('panel').addEventListener('input', ev => {
@@ -1270,6 +1278,15 @@ function addPlate() {
   captureLayout();
   rebuildSources();
   renderAll();
+}
+
+/* 清空所有粒子：把数量归零并重建，累积层也一并擦掉 */
+function clearParticles() {
+  setPair('np', 'npn', 0);
+  N_PARTICLES = 0;
+  initParticles();
+  if (trail) trail.background(BG[0], BG[1], BG[2]);
+  background(BG[0], BG[1], BG[2]);
 }
 
 function resetAll() {
