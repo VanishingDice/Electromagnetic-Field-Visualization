@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.22</div>
+<div id="ver">v0.0.23</div>
 
 <script>
 /* =====================================================================
@@ -363,6 +363,8 @@ const SINK_R = 5;               // 负电荷的吸收半径（要贴得很近才
 const PLATE_R = 10;             // 极板的吸收半径（板半高 9，只多留 1px）
 const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比例
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
+const GHOST_LIFE = 50;          // 轨迹淡出多少帧
+const MAX_GHOSTS = 36;          // 同时保留的残影上限
 
 /* 电势底色。声明必须放在 rebuildSources 之前——它在顶层就会被调用 */
 const POT_W = 400, POT_H = 225; // 网格：4px 一格
@@ -413,6 +415,7 @@ const marginPx  = () => Math.max(12, W * 0.037);
 const pointer   = {x: 0, y: 0};
 
 let particles = [];
+let ghosts    = [];   // 已消失粒子留下的轨迹，逐帧淡出
 let sources   = [];
 let cnv;
 let trail;      // 半分辨率累积层
@@ -597,7 +600,7 @@ function spawnParticle(p) {
   p.jit     = random(-0.03, 0.03);
   p.life    = 0;
   p.maxLife = random(160, 460);
-  p.alpha   = random(120, 210);
+  p.alpha   = random(150, 235);
   p.skip    = true;
   p.hist    = [];
   p.vx      = 0;
@@ -636,6 +639,7 @@ function setParticleCount(n) {
 
 function initParticles() {
   particles = [];
+  ghosts = [];          // 切换模式 / 改粒子数时，正在淡出的旧轨迹也一并清掉
   setParticleCount(N_PARTICLES);
 }
 
@@ -710,7 +714,14 @@ function stepTrajectory(p) {
   // 取消寿命限制：只在飞出画布或被极板 / 负电荷吸收时重生
   let dead = Math.abs(p.x) > W / 2 + 60 || Math.abs(p.y) > H / 2 + 60;
   if (nearSink(p.x, p.y)) dead = true;
-  if (dead) spawnParticle(p);
+  if (dead) {
+    // 把走过的路径留成「残影」，接下来几十帧慢慢淡出，而不是瞬间消失
+    if (p.hist.length >= 9) {
+      ghosts.push({hist: p.hist.slice(), rgb: p.rgb, life: GHOST_LIFE});
+      if (ghosts.length > MAX_GHOSTS) ghosts.shift();
+    }
+    spawnParticle(p);
+  }
 
   return {skip: false};
 }
@@ -999,8 +1010,8 @@ function drawTrajectories() {
     let px = h[0], py = h[1];
     for (let k = 3 * stride; k < h.length; k += 3 * stride) {
       const t = clamp((h[k + 2] - V_MIN) / (V_MAX - V_MIN), 0, 1);
-      stroke(p.rgb[0], p.rgb[1], p.rgb[2], 70 + t * 160);
-      strokeWeight(1.0 + t * 0.8);
+      stroke(p.rgb[0], p.rgb[1], p.rgb[2], 100 + t * 155);
+      strokeWeight(1.0 + t * 0.9);
       line(px, py, h[k], h[k + 1]);
       px = h[k];
       py = h[k + 1];
@@ -1009,8 +1020,30 @@ function drawTrajectories() {
     // 头部亮点，让方向一眼可见
     const tNow = clamp((Math.hypot(p.vx, p.vy) - V_MIN) / (V_MAX - V_MIN), 0, 1);
     noStroke();
-    fill(p.rgb[0], p.rgb[1], p.rgb[2], 235);
+    fill(p.rgb[0], p.rgb[1], p.rgb[2], 255);
     circle(p.x, p.y, 2.8 + tNow * 2);
+  }
+
+  // 已消失粒子的轨迹：整体按剩余寿命线性变暗，直到完全淡出
+  for (let g = ghosts.length - 1; g >= 0; g--) {
+    const gh = ghosts[g];
+    const fade = gh.life / GHOST_LIFE;
+    const h = gh.hist;
+
+    if (h.length >= 9) {
+      let px = h[0], py = h[1];
+      for (let k = 3 * stride; k < h.length; k += 3 * stride) {
+        const t = clamp((h[k + 2] - V_MIN) / (V_MAX - V_MIN), 0, 1);
+        stroke(gh.rgb[0], gh.rgb[1], gh.rgb[2], (100 + t * 155) * fade);
+        strokeWeight(1.0 + t * 0.9);
+        line(px, py, h[k], h[k + 1]);
+        px = h[k];
+        py = h[k + 1];
+      }
+    }
+
+    gh.life--;
+    if (gh.life <= 0) ghosts.splice(g, 1);
   }
 
   pop();
@@ -1413,14 +1446,15 @@ function addCharge() {
 
 function addPlate() {
   if (PLATES.length >= MAX_PLATES) return;
-  const len = Math.round(clamp(random(0.3, 0.55) * W, 160, 1100) / 10) * 10;
+  // 新增平板固定为长度 400、λ = 1，位置仍然随机
+  const len = 400;
   const mx = Math.max(40, W * 0.12);
   const my = Math.max(40, H * 0.16);
   PLATES.push({
     x: random(-W / 2 + mx, W / 2 - mx),
     y: random(-H / 2 + my, H / 2 - my),
     len,
-    lambda: Math.round(random(0.35, 0.8) * 20) / 20,
+    lambda: 1,
     color: MORANDI[(PLATES.length + 5) % MORANDI.length],
   });
   captureLayout();
