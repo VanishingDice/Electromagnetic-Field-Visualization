@@ -242,7 +242,7 @@
 </aside>
 
 <!-- 版本号：只在这里改 -->
-<div id="ver">v0.0.26</div>
+<div id="ver">v0.0.27</div>
 
 <script>
 /* =====================================================================
@@ -265,7 +265,7 @@ const LAYOUTS = {
       {x:  170, y: -260, q: -1.30, color: '#8094a6'},
       {x:  600, y:  120, q:  0.70, color: '#96a688'},
     ],
-    plates: [{x: 0, y: 210, len: 620, lambda: 0.55, color: '#8a8f96'}],
+    plates: [{x: 0, y: 210, len: 620, lambda: 0.55, color: '#5f7fa3'}],
   },
   tall: {
     refW: 440, refH: 640,
@@ -274,7 +274,7 @@ const LAYOUTS = {
       {x:   55, y: -195, q: -1.30, color: '#8094a6'},
       {x:  135, y:   70, q:  0.70, color: '#96a688'},
     ],
-    plates: [{x: 0, y: 225, len: 220, lambda: 0.55, color: '#8a8f96'}],
+    plates: [{x: 0, y: 225, len: 220, lambda: 0.55, color: '#5f7fa3'}],
   },
 };
 
@@ -362,7 +362,7 @@ const MAX_V = 14;               // 速度上限（px/帧），必须高于出射
 const SINK_R = 5;               // 负电荷的吸收半径（要贴得很近才被吞）
 const PLATE_R = 10;             // 极板的吸收半径（板半高 9，只多留 1px）
 const INFALL = 0.25;            // 从画布边缘「自无穷远」流入的比例
-const INFALL_RGB = [170, 176, 186];   // 无穷远流入的专用色：中性冷灰，和 Morandi 源色分开
+const INFALL_RGB = [102, 107, 114];   // 无穷远流入的专用色：深灰，和极板的蓝灰拉开距离
 const CH_INFALL = -1;                 // 专用通道号，离线预览据此单独染色
 const V_MIN = 0.3, V_MAX = 8;   // 速度映射到亮度/线宽的区间（px/帧）
 const GHOST_PER = 1;            // 每帧从尾端吃掉几个点：和画线的速率一致，回缩才不会「突然加速」
